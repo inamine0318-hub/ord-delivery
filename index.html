@@ -19,7 +19,9 @@
   --st-cooking:#F2665E;
   --st-delivering:#0086A8;
   --st-done:#2E9E6B;
-  --radius:16px;
+  --radius:12px;
+  --radius-sm:8px;
+  --mono-dark:#14181C;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
@@ -60,14 +62,29 @@ body{
 /* ===== Hero / Top ===== */
 .hero{
   background:linear-gradient(160deg,var(--primary) 0%,#12a4b8 55%,#5cc9c2 100%);
-  color:#fff;padding:34px 20px 30px;
-  border-radius:0 0 28px 28px;
+  color:#fff;padding:30px 20px 30px;
+  border-radius:0 0 18px 18px;
 }
-.hero .brand{font-size:13px;letter-spacing:.18em;opacity:.85;font-weight:600;}
-.hero h1{font-size:26px;margin-top:8px;line-height:1.35;font-weight:800;}
+.hero-top{display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+.logo-badge{
+  width:52px;height:52px;border-radius:50%;flex-shrink:0;
+  border:2px solid rgba(255,255,255,.75);
+  background:radial-gradient(circle at 35% 30%, #2f6b4a, #1c4a32 70%);
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+  box-shadow:0 0 0 3px rgba(255,255,255,.18);
+}
+.hero .brand{font-size:12.5px;letter-spacing:.16em;opacity:.9;font-weight:700;}
+.hero .brand-sub{font-size:10.5px;letter-spacing:.08em;opacity:.8;margin-top:2px;}
+.hero h1{font-size:25px;margin-top:2px;line-height:1.35;font-weight:800;}
 .hero p{margin-top:10px;font-size:13px;opacity:.92;line-height:1.6;}
 .wave{
   height:6px;width:46px;background:var(--gold);border-radius:4px;margin-top:14px;
+}
+.spec-badges{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;}
+.spec-badge{
+  display:flex;align-items:center;gap:5px;background:rgba(255,255,255,.16);
+  border:1px solid rgba(255,255,255,.35);border-radius:20px;padding:5px 11px;
+  font-size:10.5px;font-weight:700;letter-spacing:.03em;
 }
 .section{padding:18px 16px;}
 .section-title{font-size:15px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;gap:6px;}
@@ -84,7 +101,7 @@ body{
   display:flex;gap:12px;align-items:center;
 }
 .hotel-card:active{transform:scale(.98);}
-.hotel-card.selected{border:2px solid var(--primary);background:#f0fbfc;}
+.hotel-card.selected{border:1.5px solid var(--mono-dark);background:#f7f6f2;}
 .hotel-thumb{
   width:56px;height:56px;border-radius:12px;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;font-size:24px;
@@ -96,14 +113,14 @@ body{
 
 .cta{
   display:block;width:100%;text-align:center;
-  background:var(--primary);color:#fff;font-weight:700;font-size:15px;
-  padding:15px;border:none;border-radius:26px;cursor:pointer;margin-top:4px;
-  box-shadow:0 6px 16px rgba(15,139,156,.35);
+  background:var(--mono-dark);color:#fff;font-weight:700;font-size:15px;letter-spacing:.01em;
+  padding:15px;border:none;border-radius:var(--radius-sm);cursor:pointer;margin-top:4px;
+  box-shadow:0 2px 8px rgba(20,24,28,.18);
 }
 .cta:active{transform:scale(.98);}
-.cta.secondary{background:#fff;color:var(--primary);border:2px solid var(--primary);box-shadow:none;}
-.cta[disabled]{opacity:.4;box-shadow:none;cursor:not-allowed;}
-.cta.small{padding:11px;font-size:13px;border-radius:20px;}
+.cta.secondary{background:#fff;color:var(--mono-dark);border:1.5px solid var(--mono-dark);box-shadow:none;}
+.cta[disabled]{opacity:.35;box-shadow:none;cursor:not-allowed;}
+.cta.small{padding:11px;font-size:13px;border-radius:var(--radius-sm);}
 
 /* ===== Store list ===== */
 .store-card{
@@ -118,8 +135,8 @@ body{
 .store-info{flex:1;}
 .store-info .name{font-weight:700;font-size:15px;}
 .store-info .genre{
-  display:inline-block;font-size:10.5px;color:var(--primary-dark);
-  background:#e4f6f7;padding:2px 8px;border-radius:10px;margin-top:4px;font-weight:700;
+  display:inline-block;font-size:10.5px;color:var(--text);
+  background:transparent;border:1px solid var(--border);padding:2px 8px;border-radius:20px;margin-top:4px;font-weight:700;letter-spacing:.02em;
 }
 .store-info .desc{color:var(--text-sub);font-size:12px;margin-top:5px;line-height:1.5;}
 .store-info .meta{display:flex;gap:10px;margin-top:6px;font-size:11px;color:var(--text-sub);}
@@ -140,7 +157,7 @@ body{
 }
 
 .hero-detail{
-  padding:26px 18px 22px;color:#fff;border-radius:0 0 24px 24px;
+  padding:26px 18px 22px;color:#fff;border-radius:0 0 18px 18px;
 }
 
 /* ===== 店舗イメージ（それっぽい合成シーン。実写真の代わりに配色+装飾で世界観を表現） ===== */
@@ -221,7 +238,7 @@ body{
 .order-hero{
   text-align:center;padding:38px 20px 24px;
   background:linear-gradient(160deg,var(--primary),#5cc9c2);color:#fff;
-  border-radius:0 0 28px 28px;
+  border-radius:0 0 18px 18px;
 }
 .order-hero .ok-circle{
   width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.22);
@@ -282,7 +299,7 @@ body{
   flex-shrink:0;padding:7px 14px;border-radius:20px;background:#fff;border:1.5px solid var(--border);
   font-size:12px;font-weight:700;color:var(--text-sub);cursor:pointer;
 }
-.chip.active{background:var(--primary);color:#fff;border-color:var(--primary);}
+.chip.active{background:var(--mono-dark);color:#fff;border-color:var(--mono-dark);}
 
 ::-webkit-scrollbar{display:none;}
 </style>
@@ -491,13 +508,25 @@ function Header(title, opts={}){
 function renderTop(){
   return `
     <div class="hero">
-      <div class="brand">OKINAWA RESORT DELIVERY</div>
+      <div class="hero-top">
+        <div class="logo-badge">🌴</div>
+        <div>
+          <div class="brand">OKINAWA RESORT DELIVERY</div>
+          <div class="brand-sub">Dine in Your Villa</div>
+        </div>
+      </div>
       <h1>南国の一皿を、<br>今いる部屋まで。</h1>
       <p>ホテル・ヴィラ滞在中に、島の名店グルメをそのままお部屋へ。予約もチェックインも不要、選ぶだけ。</p>
+      <div class="spec-badges">
+        <span class="spec-badge">🌱 Vegan</span>
+        <span class="spec-badge">☪️ Halal</span>
+        <span class="spec-badge">🌾 Gluten-Free</span>
+      </div>
       <div class="wave"></div>
     </div>
     <div class="section">
       <div class="section-title">📍 ご滞在先を選択</div>
+      <div style="font-size:11.5px;color:var(--text-sub);margin:-8px 0 14px;">サービス開始エリア: 恩納村・北谷町（他エリアは順次拡大予定）</div>
       ${state.hotel ? `
         <div class="hotel-chip">
           <div class="ic">${state.hotel.icon}</div>
