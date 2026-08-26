@@ -557,8 +557,40 @@ function placeOrder(){
     cookingTimer: null, // {totalSec, remainingSec, running}
     delayStatus: null, // {active, ack, message, minutes}
   };
+  syncOrderToBackend(state.order);
   state.cart = [];
   goTo('confirm');
+}
+
+// ---------- バックエンド連携（backend/server.js、Square Webhook相当のエンドポイントへ送信） ----------
+// ローカルでバックエンドを起動していない場合は失敗して当然なので、失敗してもお客様側の
+// 注文フロー自体は止めない（ベストエフォート・非同期のfire-and-forget）。
+const BACKEND_URL = 'http://localhost:3001';
+function syncOrderToBackend(order){
+  const payload = {
+    type: 'order.created',
+    data: {
+      object: {
+        order: {
+          id: order.no,
+          note: `ヴィラ名:${order.hotel ? order.hotel.name : ''} / 部屋番号:${order.roomType} ${order.room}`,
+          line_items: order.items.map(i => ({
+            name: i.product ? i.product.name : '(不明)',
+            quantity: String(i.qty),
+            modifiers: [],
+          })),
+        },
+      },
+    },
+  };
+  fetch(`${BACKEND_URL}/webhook/square`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload),
+  })
+    .then(r => r.json())
+    .then(data => console.log('[ORD] バックエンド連携 成功:', data))
+    .catch(err => console.log('[ORD] バックエンド連携 失敗（backendが起動していない場合は正常です）:', err.message));
 }
 
 // ---------- 加盟店様：調理カウントダウン ----------
