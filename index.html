@@ -142,6 +142,41 @@ body{
 .hero-detail{
   padding:26px 18px 22px;color:#fff;border-radius:0 0 24px 24px;
 }
+
+/* ===== 店舗イメージ（それっぽい合成シーン。実写真の代わりに配色+装飾で世界観を表現） ===== */
+.photo-scene{position:relative;overflow:hidden;}
+.photo-scene::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg, rgba(0,0,0,0) 35%, rgba(0,0,0,.42) 100%);
+}
+.photo-scene>.pcontent{position:relative;z-index:2;}
+.photo-scene .deco{position:absolute;pointer-events:none;}
+
+.scene-okinawa{background:linear-gradient(160deg,#ffb35c 0%,#e8734a 55%,#7a2f1f 100%);}
+.scene-okinawa .d-sun{top:-22px;right:-12px;width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,#fff6d8,#ffd27a 58%,transparent 74%);opacity:.9;}
+.scene-okinawa .d-steam1{bottom:14px;left:26%;width:44px;height:44px;background:radial-gradient(circle,rgba(255,255,255,.4),transparent 70%);filter:blur(3px);}
+.scene-okinawa .d-steam2{bottom:26px;left:52%;width:30px;height:30px;background:radial-gradient(circle,rgba(255,255,255,.3),transparent 70%);filter:blur(3px);}
+
+.scene-vegan{background:linear-gradient(160deg,#c7ecb9 0%,#2e9e6b 55%,#123f29 100%);}
+.scene-vegan .d-leaf1{top:-14px;left:-18px;width:130px;height:130px;border-radius:0 62% 0 62%;background:rgba(255,255,255,.16);transform:rotate(-12deg);}
+.scene-vegan .d-leaf2{bottom:-28px;right:-14px;width:100px;height:100px;border-radius:62% 0 62% 0;background:rgba(0,0,0,.14);}
+.scene-vegan .d-dot{top:22px;right:22%;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.55);}
+
+.scene-halal{background:linear-gradient(160deg,#f3d08c 0%,#c9862b 55%,#5c3a10 100%);}
+.scene-halal .d-lantern{top:8px;right:20px;width:24px;height:34px;border-radius:50% 50% 40% 40%;background:rgba(255,255,255,.42);box-shadow:0 0 20px rgba(255,222,160,.65);}
+.scene-halal .d-lanternline{top:2px;right:31px;width:2px;height:8px;background:rgba(255,255,255,.5);}
+.scene-halal .d-spice{bottom:-14px;left:-14px;width:110px;height:70px;border-radius:50%;background:radial-gradient(circle,rgba(0,0,0,.18),transparent 70%);}
+
+.scene-cafe{background:linear-gradient(160deg,#c7edf5 0%,#0086a8 55%,#00344a 100%);}
+.scene-cafe .d-sun{top:-18px;left:-16px;width:74px;height:74px;border-radius:50%;background:radial-gradient(circle,#fff6d8,#ffe08a 58%,transparent 76%);opacity:.9;}
+.scene-cafe .d-wave1{bottom:-8px;left:0;right:0;height:36px;background:rgba(255,255,255,.26);border-radius:50% 50% 0 0/100% 100% 0 0;}
+.scene-cafe .d-wave2{bottom:-18px;left:0;right:0;height:26px;background:rgba(255,255,255,.16);border-radius:50% 50% 0 0/100% 100% 0 0;}
+
+.scene-fusion{background:linear-gradient(160deg,#3a3550 0%,#211d30 60%,#0c0a12 100%);}
+.scene-fusion .d-ring1{top:50%;left:78%;width:64px;height:64px;border:1.5px solid rgba(201,161,90,.55);border-radius:50%;transform:translate(-50%,-50%);}
+.scene-fusion .d-ring2{top:50%;left:78%;width:94px;height:94px;border:1px solid rgba(201,161,90,.28);border-radius:50%;transform:translate(-50%,-50%);}
+.scene-fusion .d-spark1{top:20%;left:20%;width:5px;height:5px;background:#e8cf95;border-radius:50%;box-shadow:0 0 10px 3px rgba(201,161,90,.7);}
+.scene-fusion .d-spark2{top:65%;left:34%;width:4px;height:4px;background:#e8cf95;border-radius:50%;box-shadow:0 0 8px 2px rgba(201,161,90,.6);}
 .qty-box{
   display:flex;align-items:center;justify-content:center;gap:18px;margin:22px 0;
 }
@@ -395,6 +430,18 @@ function setQty(storeId, productId, qty){
 
 function formatYen(n){ return '¥' + n.toLocaleString(); }
 
+// ---------- 店舗イメージ（実写真の代わりのCSS合成シーン、試作用） ----------
+const SCENE_CLASS = {s1:'scene-okinawa', s2:'scene-vegan', s3:'scene-halal', s4:'scene-cafe', s5:'scene-fusion'};
+const SCENE_DECO = {
+  'scene-okinawa': '<div class="deco d-sun"></div><div class="deco d-steam1"></div><div class="deco d-steam2"></div>',
+  'scene-vegan': '<div class="deco d-leaf1"></div><div class="deco d-leaf2"></div><div class="deco d-dot"></div>',
+  'scene-halal': '<div class="deco d-lantern"></div><div class="deco d-lanternline"></div><div class="deco d-spice"></div>',
+  'scene-cafe': '<div class="deco d-sun"></div><div class="deco d-wave1"></div><div class="deco d-wave2"></div>',
+  'scene-fusion': '<div class="deco d-ring1"></div><div class="deco d-ring2"></div><div class="deco d-spark1"></div><div class="deco d-spark2"></div>',
+};
+function sceneClassOf(storeId){ return SCENE_CLASS[storeId] || 'scene-okinawa'; }
+function sceneDeco(storeId){ return SCENE_DECO[sceneClassOf(storeId)] || ''; }
+
 function makeOrderNo(){
   const d = new Date();
   const ymd = d.getFullYear().toString() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
@@ -488,7 +535,7 @@ function renderStoreList(){
       </div>
       ${list.map(s=>`
         <div class="store-card" onclick="openStore('${s.id}')">
-          <div class="store-thumb" style="background:${s.color}">${s.icon}</div>
+          <div class="store-thumb photo-scene ${sceneClassOf(s.id)}">${sceneDeco(s.id)}<span class="pcontent">${s.icon}</span></div>
           <div class="store-info">
             <div class="name">${s.name}</div>
             <span class="genre">${s.genre}</span>
@@ -508,11 +555,14 @@ function renderStoreDetail(){
   if(!s) return renderEmpty('store not found','storeList');
   return `
     ${Header(s.name, {backTo:'storeList'})}
-    <div class="hero-detail" style="background:linear-gradient(150deg, ${s.color}, #ffffff22), ${s.color}">
-      <div style="font-size:40px;">${s.icon}</div>
-      <div style="font-weight:800;font-size:19px;margin-top:8px;">${s.name}</div>
-      <div style="font-size:12.5px;opacity:.9;margin-top:4px;">${s.desc}</div>
-      <div style="margin-top:10px;font-size:12px;opacity:.9;">⏱ 調理・お届け目安 ${s.time}　｜　最低注文 ${formatYen(s.minOrder)}</div>
+    <div class="hero-detail photo-scene ${sceneClassOf(s.id)}" style="min-height:150px;">
+      ${sceneDeco(s.id)}
+      <div class="pcontent">
+        <div style="font-size:40px;">${s.icon}</div>
+        <div style="font-weight:800;font-size:19px;margin-top:8px;">${s.name}</div>
+        <div style="font-size:12.5px;opacity:.9;margin-top:4px;">${s.desc}</div>
+        <div style="margin-top:10px;font-size:12px;opacity:.9;">⏱ 調理・お届け目安 ${s.time}　｜　最低注文 ${formatYen(s.minOrder)}</div>
+      </div>
     </div>
     <div class="section">
       <div class="section-title">メニュー</div>
@@ -542,11 +592,14 @@ function renderProductDetail(){
   const qty = state._qty || 1;
   return `
     ${Header(s.name, {backTo:'storeDetail'})}
-    <div class="hero-detail" style="background:${s.color};">
-      <div style="font-size:52px;">🍴</div>
-      <div style="font-weight:800;font-size:20px;margin-top:10px;">${p.name}</div>
-      <div style="font-size:13px;opacity:.9;margin-top:6px;">${p.desc}</div>
-      <div style="font-size:19px;font-weight:800;margin-top:12px;">${formatYen(p.price)}</div>
+    <div class="hero-detail photo-scene ${sceneClassOf(s.id)}" style="min-height:150px;">
+      ${sceneDeco(s.id)}
+      <div class="pcontent">
+        <div style="font-size:52px;">🍴</div>
+        <div style="font-weight:800;font-size:20px;margin-top:10px;">${p.name}</div>
+        <div style="font-size:13px;opacity:.9;margin-top:6px;">${p.desc}</div>
+        <div style="font-size:19px;font-weight:800;margin-top:12px;">${formatYen(p.price)}</div>
+      </div>
     </div>
     <div class="section">
       <div class="qty-box">
