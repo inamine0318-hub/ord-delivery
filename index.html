@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ORD - Okinawa Resort Delivery</title>
+<style>
+:root{
+  --bg:#FAF6EE;
+  --card:#FFFFFF;
+  --primary:#0086A8;
+  --primary-dark:#00647d;
+  --secondary:#F2665E;
+  --text:#1F2D3A;
+  --text-sub:#6B7680;
+  --gold:#C9A15A;
+  --border:#E7E0D2;
+  --st-received:#E8A33D;
+  --st-cooking:#F2665E;
+  --st-delivering:#0086A8;
+  --st-done:#2E9E6B;
+  --radius:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:"Hiragino Sans","Yu Gothic",sans-serif;
+  background:#e4ded0;
+  color:var(--text);
+  display:flex;justify-content:center;
+  min-height:100vh;
+}
+#phone{
+  width:100%;max-width:430px;min-height:100vh;
+  background:var(--bg);
+  position:relative;
+  box-shadow:0 0 40px rgba(0,0,0,.15);
+  display:flex;flex-direction:column;
+}
+#app{flex:1;padding-bottom:24px;}
+
+/* ===== Header ===== */
+.topbar{
+  position:sticky;top:0;z-index:10;
+  background:var(--card);
+  border-bottom:1px solid var(--border);
+  padding:14px 16px;
+  display:flex;align-items:center;gap:10px;
+}
+.topbar .back{font-size:20px;color:var(--primary);cursor:pointer;padding:2px 6px;}
+.topbar .title{font-size:17px;font-weight:700;flex:1;}
+.topbar .cart-btn{position:relative;font-size:20px;cursor:pointer;}
+.badge{
+  position:absolute;top:-6px;right:-8px;
+  background:var(--secondary);color:#fff;
+  font-size:10px;font-weight:700;
+  border-radius:10px;min-width:16px;height:16px;
+  display:flex;align-items:center;justify-content:center;padding:0 3px;
+}
+
+/* ===== Hero / Top ===== */
+.hero{
+  background:linear-gradient(160deg,var(--primary) 0%,#12a4b8 55%,#5cc9c2 100%);
+  color:#fff;padding:34px 20px 30px;
+  border-radius:0 0 28px 28px;
+}
+.hero .brand{font-size:13px;letter-spacing:.18em;opacity:.85;font-weight:600;}
+.hero h1{font-size:26px;margin-top:8px;line-height:1.35;font-weight:800;}
+.hero p{margin-top:10px;font-size:13px;opacity:.92;line-height:1.6;}
+.wave{
+  height:6px;width:46px;background:var(--gold);border-radius:4px;margin-top:14px;
+}
+.section{padding:18px 16px;}
+.section-title{font-size:15px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;gap:6px;}
+.section-title .tag{
+  font-size:10px;background:var(--secondary);color:#fff;
+  padding:2px 8px;border-radius:20px;font-weight:700;
+}
+
+/* ===== Hotel picker ===== */
+.hotel-card{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--radius);padding:14px;margin-bottom:12px;
+  cursor:pointer;transition:transform .12s;
+  display:flex;gap:12px;align-items:center;
+}
+.hotel-card:active{transform:scale(.98);}
+.hotel-card.selected{border:2px solid var(--primary);background:#f0fbfc;}
+.hotel-thumb{
+  width:56px;height:56px;border-radius:12px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+  background:linear-gradient(135deg,var(--primary),#5cc9c2);
+}
+.hotel-info .name{font-weight:700;font-size:14.5px;}
+.hotel-info .area{color:var(--primary);font-size:11.5px;font-weight:700;margin-top:2px;}
+.hotel-info .feat{color:var(--text-sub);font-size:11.5px;margin-top:3px;}
+
+.cta{
+  display:block;width:100%;text-align:center;
+  background:var(--primary);color:#fff;font-weight:700;font-size:15px;
+  padding:15px;border:none;border-radius:26px;cursor:pointer;margin-top:4px;
+  box-shadow:0 6px 16px rgba(15,139,156,.35);
+}
+.cta:active{transform:scale(.98);}
+.cta.secondary{background:#fff;color:var(--primary);border:2px solid var(--primary);box-shadow:none;}
+.cta[disabled]{opacity:.4;box-shadow:none;cursor:not-allowed;}
+.cta.small{padding:11px;font-size:13px;border-radius:20px;}
+
+/* ===== Store list ===== */
+.store-card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;margin-bottom:12px;cursor:pointer;display:flex;gap:12px;
+}
+.store-card:active{transform:scale(.98);}
+.store-thumb{
+  width:64px;height:64px;border-radius:12px;flex-shrink:0;font-size:26px;
+  display:flex;align-items:center;justify-content:center;color:#fff;
+}
+.store-info{flex:1;}
+.store-info .name{font-weight:700;font-size:15px;}
+.store-info .genre{
+  display:inline-block;font-size:10.5px;color:var(--primary-dark);
+  background:#e4f6f7;padding:2px 8px;border-radius:10px;margin-top:4px;font-weight:700;
+}
+.store-info .desc{color:var(--text-sub);font-size:12px;margin-top:5px;line-height:1.5;}
+.store-info .meta{display:flex;gap:10px;margin-top:6px;font-size:11px;color:var(--text-sub);}
+
+/* ===== Menu / product ===== */
+.prod-row{
+  background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;
+  cursor:pointer;gap:10px;
+}
+.prod-row:active{transform:scale(.98);}
+.prod-row .pname{font-weight:700;font-size:14px;}
+.prod-row .pdesc{color:var(--text-sub);font-size:11.5px;margin-top:3px;line-height:1.4;}
+.prod-row .pprice{color:var(--primary-dark);font-weight:800;font-size:13.5px;margin-top:6px;}
+.prod-icon{
+  width:46px;height:46px;border-radius:10px;flex-shrink:0;font-size:20px;
+  display:flex;align-items:center;justify-content:center;color:#fff;
+}
+
+.hero-detail{
+  padding:26px 18px 22px;color:#fff;border-radius:0 0 24px 24px;
+}
+.qty-box{
+  display:flex;align-items:center;justify-content:center;gap:18px;margin:22px 0;
+}
+.qty-btn{
+  width:40px;height:40px;border-radius:50%;border:2px solid var(--primary);
+  background:#fff;color:var(--primary);font-size:20px;font-weight:800;cursor:pointer;
+}
+.qty-num{font-size:22px;font-weight:800;min-width:30px;text-align:center;}
+
+/* ===== Cart ===== */
+.cart-item{
+  background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+.cart-item .cname{font-weight:700;font-size:13.5px;}
+.cart-item .cstore{color:var(--text-sub);font-size:11px;margin-top:2px;}
+.mini-qty{display:flex;align-items:center;gap:8px;}
+.mini-qty button{
+  width:26px;height:26px;border-radius:50%;border:1px solid var(--border);background:#fff;
+  font-size:14px;cursor:pointer;color:var(--primary);
+}
+.summary-row{display:flex;justify-content:space-between;padding:8px 0;font-size:13.5px;}
+.summary-row.total{font-weight:800;font-size:16px;border-top:1px dashed var(--border);margin-top:8px;padding-top:14px;color:var(--primary-dark);}
+
+/* ===== Form ===== */
+.field{margin-bottom:16px;}
+.field label{display:block;font-size:12.5px;font-weight:700;color:var(--text-sub);margin-bottom:6px;}
+.field input,.field select,.field textarea{
+  width:100%;padding:13px 14px;border:1.5px solid var(--border);border-radius:12px;
+  font-size:14.5px;font-family:inherit;background:#fff;color:var(--text);
+}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--primary);}
+.hotel-chip{
+  display:flex;align-items:center;gap:10px;background:#f0fbfc;border:1.5px solid var(--primary);
+  border-radius:14px;padding:12px 14px;margin-bottom:18px;
+}
+.hotel-chip .ic{font-size:22px;}
+.hotel-chip .hn{font-weight:700;font-size:13.5px;}
+.hotel-chip .ha{font-size:11px;color:var(--primary-dark);}
+
+/* ===== Confirm / Order number ===== */
+.order-hero{
+  text-align:center;padding:38px 20px 24px;
+  background:linear-gradient(160deg,var(--primary),#5cc9c2);color:#fff;
+  border-radius:0 0 28px 28px;
+}
+.order-hero .ok-circle{
+  width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.22);
+  display:flex;align-items:center;justify-content:center;font-size:32px;margin:0 auto 14px;
+}
+.order-no{
+  font-size:20px;font-weight:800;letter-spacing:.04em;margin-top:8px;
+}
+.receipt{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px;margin:16px;
+}
+.receipt .line{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;color:var(--text-sub);}
+.receipt .line b{color:var(--text);}
+
+/* ===== Status ===== */
+.status-hero{padding:26px 18px;text-align:center;}
+.status-badge{
+  display:inline-block;padding:8px 22px;border-radius:24px;color:#fff;font-weight:800;font-size:14px;
+  box-shadow:0 6px 14px rgba(0,0,0,.12);
+}
+.timeline{padding:8px 24px 4px;position:relative;}
+.tl-step{display:flex;gap:14px;padding:14px 0;position:relative;}
+.tl-dot{
+  width:30px;height:30px;border-radius:50%;background:#e2e6e8;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;z-index:1;
+  transition:background .3s;
+}
+.tl-step.done .tl-dot{background:var(--st-done);}
+.tl-step.active .tl-dot{background:var(--primary);box-shadow:0 0 0 5px rgba(15,139,156,.18);}
+.tl-line{
+  position:absolute;left:29px;top:38px;bottom:-14px;width:2px;background:#e2e6e8;
+}
+.tl-step.done .tl-line{background:var(--st-done);}
+.tl-step:last-child .tl-line{display:none;}
+.tl-text .tt{font-weight:700;font-size:13.5px;}
+.tl-text .ts{font-size:11px;color:var(--text-sub);margin-top:2px;}
+.map-mock{
+  margin:16px;height:150px;border-radius:var(--radius);
+  background:linear-gradient(135deg,#cdeef0,#a9dfe4);
+  display:flex;align-items:center;justify-content:center;color:var(--primary-dark);
+  font-size:13px;font-weight:700;position:relative;overflow:hidden;
+}
+.map-mock .bike{position:absolute;font-size:22px;animation:driveby 3.2s linear infinite;}
+@keyframes driveby{0%{left:8%;}100%{left:82%;}}
+
+.empty{text-align:center;padding:60px 24px;color:var(--text-sub);}
+.empty .ic{font-size:44px;margin-bottom:14px;}
+
+.bottombar{
+  position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--border);
+  padding:12px 16px;display:flex;gap:10px;align-items:center;
+}
+.bottombar .price{font-weight:800;font-size:16px;color:var(--primary-dark);flex-shrink:0;}
+
+.chip-row{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;margin-bottom:14px;}
+.chip{
+  flex-shrink:0;padding:7px 14px;border-radius:20px;background:#fff;border:1.5px solid var(--border);
+  font-size:12px;font-weight:700;color:var(--text-sub);cursor:pointer;
+}
+.chip.active{background:var(--primary);color:#fff;border-color:var(--primary);}
+
+::-webkit-scrollbar{display:none;}
+</style>
+</head>
+<body>
+<div id="phone"><div id="app"></div></div>
+
+<script>
+// ============================================================
+// ORD (Okinawa Resort Delivery) — MVP プロトタイプ
+// モックデータのみで完結。将来的なAPI/DB/GPS追跡接続を見据え、
+// 「画面(screen) × 状態(state)」を分離し、状態遷移はすべて goTo()/setState() 経由に統一。
+// ============================================================
+
+// ---------- Mock Data (仮データ：リサーチ次長の正式データ到着後に差し替え予定) ----------
+const HOTELS = [
+  {id:'h1', name:'コーラルテラス恩納', area:'恩納村', feature:'オーシャンビュー・インフィニティプール併設', icon:'🏖️', rooms:['オーシャンスイート','プールサイドヴィラ']},
+  {id:'h2', name:'読谷ムーンリーフリゾート', area:'読谷村', feature:'全室プライベートプール・サンセットビュー', icon:'🌙', rooms:['ガーデンヴィラ','プライベートプールヴィラ']},
+  {id:'h3', name:'名護グリーンベイホテル', area:'名護市', feature:'山と海を望むファミリー向け立地', icon:'🌳', rooms:['マウンテンビューツイン','ベイビュースイート']},
+  {id:'h4', name:'北谷サンセットコースト', area:'北谷町', feature:'アメリカンビレッジ近接・街歩き便利', icon:'🌇', rooms:['シービューダブル','コーナースイート']},
+  {id:'h5', name:'恩納シーサイドコーラルヴィラ', area:'恩納村', feature:'プライベートビーチ直結アクセス', icon:'🐚', rooms:['コーラルスイート','ビーチフロントヴィラ']},
+  {id:'h6', name:'読谷ザ・ラグーンリゾート', area:'読谷村', feature:'静かなラグーンに面したロケーション', icon:'🐠', rooms:['ラグーンビュールーム','デラックスヴィラ']},
+  {id:'h7', name:'名護フォレストヒルズヴィラ', area:'名護市', feature:'やんばるの森に囲まれた隠れ家的滞在', icon:'🌿', rooms:['フォレストコテージ','デラックスガーデンルーム']},
+  {id:'h8', name:'北谷マリーナビューホテル', area:'北谷町', feature:'マリーナ隣接・夜景が美しい', icon:'⛵', rooms:['マリーナビューツイン','スカイスイート']},
+  {id:'h9', name:'恩納ザ・パームリゾート&スパ', area:'恩納村', feature:'高級スパ併設・ハネムーン需要が高い', icon:'💆', rooms:['パームスイート','スパヴィラ']},
+  {id:'h10', name:'読谷コーラルサンズヴィラ', area:'読谷村', feature:'白砂ビーチ直結の静かな隠れ家', icon:'🏝️', rooms:['サンズヴィラ','オーシャンフロントスイート']},
+];
+
+const STORES = [
+  {
+    id:'s1', name:'琉球食堂 ちゅら島', genre:'沖縄料理', icon:'🍜', color:'#E8734A',
+    desc:'地元食材を使った家庭的な沖縄料理店。観光客にも人気の定番メニューが揃う。',
+    time:'25〜35分', minOrder:800,
+    menu:[
+      {id:'p1', name:'ソーキそば', price:980, desc:'柔らかく煮込んだソーキがのった沖縄の定番そば'},
+      {id:'p2', name:'ゴーヤチャンプルー', price:880, desc:'ゴーヤと豆腐、豚肉を炒めた沖縄家庭料理の代表格'},
+      {id:'p3', name:'沖縄タコライス', price:1080, desc:'タコスの具をご飯にのせた沖縄発祥のボリュームメニュー'},
+      {id:'p4', name:'ラフテー', price:1280, desc:'豚バラ肉を泡盛と黒糖でじっくり煮込んだ琉球料理の逸品'},
+      {id:'p5', name:'じゅーしー', price:680, desc:'豚肉と野菜を炊き込んだ沖縄風炊き込みご飯'},
+      {id:'p6', name:'サーターアンダギー(3個)', price:450, desc:'沖縄伝統の揚げドーナツ、外はカリッと中はもちもち'},
+    ],
+  },
+  {
+    id:'s2', name:'グリーンウェーブ オーガニックキッチン', genre:'Vegan', icon:'🥗', color:'#2E9E6B',
+    desc:'島野菜と豆腐を中心にした植物性100%のヘルシーメニューを提供するヴィーガン専門店。',
+    time:'20〜30分', minOrder:1000,
+    menu:[
+      {id:'p7', name:'島野菜のヴィーガンチャンプルー', price:1180, desc:'動物性食材不使用、島豆腐と季節野菜の炒め物'},
+      {id:'p8', name:'ゴーヤと豆乳のグリーンカレー', price:1280, desc:'ココナッツと豆乳仕立てのまろやかなヴィーガンカレー'},
+      {id:'p9', name:'大豆ミートのタコライス', price:1180, desc:'大豆ミートを使った罪悪感のないタコライス'},
+      {id:'p10', name:'島豆腐のヴィーガンバーガー', price:1380, desc:'島豆腐パティを使ったプラントベースバーガー'},
+      {id:'p11', name:'紅芋とココナッツのスムージーボウル', price:980, desc:'紅芋とフルーツを使った彩り豊かなボウル'},
+      {id:'p12', name:'黒糖ヴィーガンパンケーキ', price:880, desc:'卵・乳製品不使用、黒糖の優しい甘さのパンケーキ'},
+    ],
+  },
+  {
+    id:'s3', name:'アルマナラ ハラールダイニング', genre:'Halal', icon:'🍛', color:'#C9862B',
+    desc:'ハラール認証食材のみを使用し、イスラム教徒の滞在客も安心して楽しめる多国籍料理店。',
+    time:'25〜35分', minOrder:1200,
+    menu:[
+      {id:'p13', name:'ハラールチキンビリヤニ', price:1480, desc:'ハラール認証チキンを使ったスパイス香る炊き込みご飯'},
+      {id:'p14', name:'ラム肉のグリル(ハラール)', price:1980, desc:'ハラール認証ラム肉を炭火でじっくり焼き上げた一品'},
+      {id:'p15', name:'チキンケバブプレート', price:1380, desc:'ハラールチキンを使った中東風ケバブとサラダのセット'},
+      {id:'p16', name:'島魚とハラールスパイスのグリル', price:1680, desc:'沖縄近海の魚をハラールスパイスで仕上げた一品'},
+      {id:'p17', name:'ハラールタコライス', price:1280, desc:'ハラール認証牛肉を使用した沖縄名物タコライス'},
+      {id:'p18', name:'ミントラッシー', price:580, desc:'ヨーグルトとミントの爽やかな飲み物'},
+    ],
+  },
+  {
+    id:'s4', name:'オーシャンブルー カフェ&スイーツ', genre:'カフェ・スイーツ', icon:'☕', color:'#0086A8',
+    desc:'海を眺めながらくつろげるカジュアルカフェ。スイーツとドリンクが充実。',
+    time:'15〜25分', minOrder:600,
+    menu:[
+      {id:'p19', name:'シークヮーサーソーダ', price:580, desc:'沖縄産シークヮーサーを使った爽やかな炭酸ドリンク'},
+      {id:'p20', name:'紅芋タルト', price:580, desc:'沖縄紅芋を使ったしっとり濃厚なタルト'},
+      {id:'p21', name:'ジェラート(2種盛り)', price:680, desc:'沖縄らしいカラフルなジェラート盛り合わせ'},
+      {id:'p22', name:'パイナップルパンケーキ', price:1080, desc:'沖縄産パイナップルをたっぷりのせたふわふわパンケーキ'},
+      {id:'p23', name:'島バナナスムージー', price:680, desc:'島バナナを使った濃厚でクリーミーなスムージー'},
+      {id:'p24', name:'塩ちんすこうパフェ', price:880, desc:'定番土産ちんすこうを使ったご当地パフェ'},
+    ],
+  },
+  {
+    id:'s5', name:'アズーラ・オキナワン フュージョンダイニング', genre:'高級・フュージョン', icon:'🍽️', color:'#C9A15A',
+    desc:'地元食材とフレンチ・イタリアンの技法を融合させた、リゾートらしい特別感のある一皿を、お部屋で。',
+    time:'35〜45分', minOrder:2000,
+    menu:[
+      {id:'p25', name:'島魚のカルパッチョ', price:2200, desc:'沖縄近海の白身魚を使った柑橘風味のカルパッチョ'},
+      {id:'p26', name:'アグー豚のロースト', price:4800, desc:'ブランド豚アグーを使った赤ワインソース仕立てのメイン'},
+      {id:'p27', name:'石垣牛フィレステーキ', price:6800, desc:'石垣牛フィレ肉を炭火で焼き上げた贅沢な一皿'},
+      {id:'p28', name:'海ぶどうとウニのパスタ', price:3200, desc:'沖縄産海ぶどうと濃厚な雲丹を絡めた特製パスタ'},
+      {id:'p29', name:'シェフおまかせコース(5品)', price:9800, desc:'旬の食材を使ったシェフ厳選のコースメニュー'},
+      {id:'p30', name:'パッションフルーツのパンナコッタ', price:1200, desc:'南国フルーツを使った爽やかなデザート'},
+    ],
+  },
+];
+
+const STATUS_STEPS = [
+  {key:'received', label:'注文受付', icon:'📝', color:'var(--st-received)'},
+  {key:'cooking', label:'お店で調理中', icon:'🍳', color:'var(--st-cooking)'},
+  {key:'delivering', label:'配達中', icon:'🛵', color:'var(--st-delivering)'},
+  {key:'done', label:'お届け完了', icon:'✅', color:'var(--st-done)'},
+];
+
+// ---------- State ----------
+const state = {
+  screen:'top',
+  hotel:null,
+  room:'',
+  roomType:'',
+  guestName:'',
+  note:'',
+  activeStoreId:null,
+  activeProductId:null,
+  activeGenreFilter:'すべて',
+  cart:[], // {storeId, productId, qty}
+  order:null, // {no, items, total, hotel, room, createdAt, statusIndex}
+};
+
+function goTo(screen){ state.screen = screen; render(); scrollToTop(); }
+function scrollToTop(){ const app=document.getElementById('app'); if(app) app.scrollTop=0; window.scrollTo(0,0); }
+
+function getStore(id){ return STORES.find(s=>s.id===id); }
+function getProduct(storeId,pid){ const s=getStore(storeId); return s&&s.menu.find(p=>p.id===pid); }
+
+function cartCount(){ return state.cart.reduce((sum,c)=>sum+c.qty,0); }
+function cartTotal(){ return state.cart.reduce((sum,c)=>{ const p=getProduct(c.storeId,c.productId); return sum + (p?p.price*c.qty:0); },0); }
+function cartStoreId(){ return state.cart.length ? state.cart[0].storeId : null; }
+
+function addToCart(storeId, productId, qty){
+  // 単一店舗のみカート保持（別店舗を追加しようとしたらカートをリセットする設計）
+  if(cartStoreId() && cartStoreId()!==storeId){
+    if(!confirm('カート内は別店舗の商品です。カートを空にして新しい店舗の商品を追加しますか？')) return;
+    state.cart = [];
+  }
+  const existing = state.cart.find(c=>c.storeId===storeId && c.productId===productId);
+  if(existing) existing.qty += qty; else state.cart.push({storeId, productId, qty});
+}
+function setQty(storeId, productId, qty){
+  const item = state.cart.find(c=>c.storeId===storeId && c.productId===productId);
+  if(!item) return;
+  item.qty = qty;
+  if(item.qty<=0) state.cart = state.cart.filter(c=>c!==item);
+  render();
+}
+
+function formatYen(n){ return '¥' + n.toLocaleString(); }
+
+function makeOrderNo(){
+  const d = new Date();
+  const ymd = d.getFullYear().toString() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+  const rand = String(Math.floor(Math.random()*900)+100);
+  return `ORD-${ymd}-${rand}`;
+}
+
+function placeOrder(){
+  const store = getStore(cartStoreId());
+  state.order = {
+    no: makeOrderNo(),
+    items: state.cart.map(c=>({...c, product:getProduct(c.storeId,c.productId)})),
+    total: cartTotal(),
+    hotel: state.hotel,
+    room: state.room,
+    roomType: state.roomType,
+    storeName: store ? store.name : '',
+    createdAt: new Date(),
+    statusIndex: 0,
+  };
+  state.cart = [];
+  goTo('confirm');
+}
+
+// ステータス自動進行（デモ用：数秒おきに次のステータスへ進める）
+let statusTimer = null;
+function startStatusAutoAdvance(){
+  clearInterval(statusTimer);
+  statusTimer = setInterval(()=>{
+    if(!state.order) { clearInterval(statusTimer); return; }
+    if(state.order.statusIndex < STATUS_STEPS.length-1){
+      state.order.statusIndex++;
+      if(state.screen==='status') render();
+    } else {
+      clearInterval(statusTimer);
+    }
+  }, 4000);
+}
+
+// ---------- Screens ----------
+function Header(title, opts={}){
+  const back = opts.back!==false ? `<span class="back" onclick="${opts.backTo?`goTo('${opts.backTo}')`:'history.back()'}">‹</span>` : '<span style="width:26px"></span>';
+  const cart = opts.hideCart ? '' : `<span class="cart-btn" onclick="goTo('cart')">🛒${cartCount()>0?`<span class="badge">${cartCount()}</span>`:''}</span>`;
+  return `<div class="topbar">${back}<div class="title">${title}</div>${cart}</div>`;
+}
+
+function renderTop(){
+  return `
+    <div class="hero">
+      <div class="brand">OKINAWA RESORT DELIVERY</div>
+      <h1>南国の一皿を、<br>今いる部屋まで。</h1>
+      <p>ホテル・ヴィラ滞在中に、島の名店グルメをそのままお部屋へ。予約もチェックインも不要、選ぶだけ。</p>
+      <div class="wave"></div>
+    </div>
+    <div class="section">
+      <div class="section-title">📍 ご滞在先を選択</div>
+      ${state.hotel ? `
+        <div class="hotel-chip">
+          <div class="ic">${state.hotel.icon}</div>
+          <div><div class="hn">${state.hotel.name}</div><div class="ha">${state.hotel.area}・選択中</div></div>
+        </div>
+      ` : ''}
+      ${HOTELS.map(h=>`
+        <div class="hotel-card ${state.hotel&&state.hotel.id===h.id?'selected':''}" onclick="selectHotel('${h.id}')">
+          <div class="hotel-thumb">${h.icon}</div>
+          <div class="hotel-info">
+            <div class="name">${h.name}</div>
+            <div class="area">${h.area}</div>
+            <div class="feat">${h.feature}</div>
+          </div>
+        </div>
+      `).join('')}
+      <button class="cta" ${state.hotel?'':'disabled'} onclick="goTo('storeList')">この滞在先でお店を探す</button>
+    </div>
+  `;
+}
+function selectHotel(id){ state.hotel = HOTELS.find(h=>h.id===id); state.roomType=''; render(); }
+
+function renderStoreList(){
+  const genres = ['すべて', ...new Set(STORES.map(s=>s.genre))];
+  const list = state.activeGenreFilter==='すべて' ? STORES : STORES.filter(s=>s.genre===state.activeGenreFilter);
+  return `
+    ${Header('お店を選ぶ', {backTo:'top'})}
+    <div class="section" style="padding-bottom:4px;">
+      <div class="hotel-chip" style="margin-bottom:14px;">
+        <div class="ic">${state.hotel?.icon||'📍'}</div>
+        <div><div class="hn">${state.hotel?.name||'滞在先未選択'}</div><div class="ha">${state.hotel?.area||''}${state.room?`・${state.room}号室`:''}</div></div>
+      </div>
+      <div class="chip-row">
+        ${genres.map(g=>`<div class="chip ${state.activeGenreFilter===g?'active':''}" onclick="filterGenre('${g}')">${g}</div>`).join('')}
+      </div>
+      ${list.map(s=>`
+        <div class="store-card" onclick="openStore('${s.id}')">
+          <div class="store-thumb" style="background:${s.color}">${s.icon}</div>
+          <div class="store-info">
+            <div class="name">${s.name}</div>
+            <span class="genre">${s.genre}</span>
+            <div class="desc">${s.desc}</div>
+            <div class="meta"><span>⏱ ${s.time}</span><span>最低注文 ${formatYen(s.minOrder)}</span></div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+function filterGenre(g){ state.activeGenreFilter=g; render(); }
+function openStore(id){ state.activeStoreId=id; goTo('storeDetail'); }
+
+function renderStoreDetail(){
+  const s = getStore(state.activeStoreId);
+  if(!s) return renderEmpty('store not found','storeList');
+  return `
+    ${Header(s.name, {backTo:'storeList'})}
+    <div class="hero-detail" style="background:linear-gradient(150deg, ${s.color}, #ffffff22), ${s.color}">
+      <div style="font-size:40px;">${s.icon}</div>
+      <div style="font-weight:800;font-size:19px;margin-top:8px;">${s.name}</div>
+      <div style="font-size:12.5px;opacity:.9;margin-top:4px;">${s.desc}</div>
+      <div style="margin-top:10px;font-size:12px;opacity:.9;">⏱ 調理・お届け目安 ${s.time}　｜　最低注文 ${formatYen(s.minOrder)}</div>
+    </div>
+    <div class="section">
+      <div class="section-title">メニュー</div>
+      ${s.menu.map(p=>`
+        <div class="prod-row" onclick="openProduct('${s.id}','${p.id}')">
+          <div style="display:flex;gap:10px;align-items:center;">
+            <div class="prod-icon" style="background:${s.color}">🍴</div>
+            <div>
+              <div class="pname">${p.name}</div>
+              <div class="pdesc">${p.desc}</div>
+              <div class="pprice">${formatYen(p.price)}</div>
+            </div>
+          </div>
+          <div style="font-size:20px;color:${s.color};font-weight:800;">›</div>
+        </div>
+      `).join('')}
+    </div>
+    ${cartCount()>0?renderBottomCartBar():''}
+  `;
+}
+function openProduct(storeId,pid){ state.activeStoreId=storeId; state.activeProductId=pid; state._qty=1; goTo('productDetail'); }
+
+function renderProductDetail(){
+  const s = getStore(state.activeStoreId);
+  const p = s && s.menu.find(m=>m.id===state.activeProductId);
+  if(!s||!p) return renderEmpty('product not found','storeList');
+  const qty = state._qty || 1;
+  return `
+    ${Header(s.name, {backTo:'storeDetail'})}
+    <div class="hero-detail" style="background:${s.color};">
+      <div style="font-size:52px;">🍴</div>
+      <div style="font-weight:800;font-size:20px;margin-top:10px;">${p.name}</div>
+      <div style="font-size:13px;opacity:.9;margin-top:6px;">${p.desc}</div>
+      <div style="font-size:19px;font-weight:800;margin-top:12px;">${formatYen(p.price)}</div>
+    </div>
+    <div class="section">
+      <div class="qty-box">
+        <div class="qty-btn" onclick="changeQty(-1)">－</div>
+        <div class="qty-num">${qty}</div>
+        <div class="qty-btn" onclick="changeQty(1)">＋</div>
+      </div>
+      <button class="cta" onclick="addFromDetail('${s.id}','${p.id}')">カートに追加（${formatYen(p.price*qty)}）</button>
+    </div>
+  `;
+}
+function changeQty(d){ state._qty = Math.max(1,(state._qty||1)+d); render(); }
+function addFromDetail(storeId,pid){
+  addToCart(storeId,pid,state._qty||1);
+  state._qty=1;
+  goTo('storeDetail');
+}
+
+function renderBottomCartBar(){
+  return `
+    <div class="bottombar">
+      <div class="price">${formatYen(cartTotal())}</div>
+      <button class="cta" style="margin:0;" onclick="goTo('cart')">カートを見る（${cartCount()}点）</button>
+    </div>
+  `;
+}
+
+function renderCart(){
+  if(state.cart.length===0){
+    return `${Header('カート',{backTo:'storeList',hideCart:true})}${renderEmpty('🛒','カートは空です','storeList','お店を見る')}`;
+  }
+  const store = getStore(cartStoreId());
+  return `
+    ${Header('カート', {backTo:'storeList', hideCart:true})}
+    <div class="section">
+      <div style="font-size:12.5px;color:var(--text-sub);margin-bottom:10px;">${store?store.name:''} からのご注文</div>
+      ${state.cart.map(c=>{
+        const p = getProduct(c.storeId,c.productId);
+        if(!p) return '';
+        return `
+        <div class="cart-item">
+          <div>
+            <div class="cname">${p.name}</div>
+            <div class="cstore">${formatYen(p.price)} × ${c.qty}</div>
+          </div>
+          <div class="mini-qty">
+            <button onclick="setQty('${c.storeId}','${c.productId}',${c.qty-1})">－</button>
+            <span>${c.qty}</span>
+            <button onclick="setQty('${c.storeId}','${c.productId}',${c.qty+1})">＋</button>
+          </div>
+        </div>`;
+      }).join('')}
+      <div style="margin-top:10px;">
+        <div class="summary-row"><span>小計</span><span>${formatYen(cartTotal())}</span></div>
+        <div class="summary-row"><span>配送料</span><span>${formatYen(300)}</span></div>
+        <div class="summary-row total"><span>合計</span><span>${formatYen(cartTotal()+300)}</span></div>
+      </div>
+      <button class="cta" onclick="goTo('delivery')">配送先を入力する</button>
+    </div>
+  `;
+}
+
+function renderDelivery(){
+  return `
+    ${Header('配送先の入力', {backTo:'cart', hideCart:true})}
+    <div class="section">
+      <div class="hotel-chip">
+        <div class="ic">${state.hotel?.icon||'📍'}</div>
+        <div><div class="hn">${state.hotel?.name||'滞在先未選択'}</div><div class="ha">${state.hotel?.area||''}</div></div>
+      </div>
+      <div class="field">
+        <label>部屋タイプ</label>
+        <select onchange="state.roomType=this.value">
+          <option value="">選択してください</option>
+          ${(state.hotel?.rooms||[]).map(r=>`<option value="${r}" ${state.roomType===r?'selected':''}>${r}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>部屋番号</label>
+        <input type="text" placeholder="例：805" value="${state.room}" oninput="state.room=this.value">
+      </div>
+      <div class="field">
+        <label>お名前</label>
+        <input type="text" placeholder="例：山田 太郎" value="${state.guestName}" oninput="state.guestName=this.value">
+      </div>
+      <div class="field">
+        <label>ご要望（任意）</label>
+        <textarea rows="3" placeholder="アレルギー・置き配のご希望など" oninput="state.note=this.value">${state.note}</textarea>
+      </div>
+      <button class="cta" onclick="tryConfirmOrder()">注文内容を確認する</button>
+    </div>
+  `;
+}
+function tryConfirmOrder(){
+  if(!state.hotel){ alert('滞在先ホテルが選択されていません。'); return; }
+  if(!state.roomType){ alert('部屋タイプを選択してください。'); return; }
+  if(!state.room){ alert('部屋番号を入力してください。'); return; }
+  goTo('reviewOrder');
+}
+
+function renderReviewOrder(){
+  const store = getStore(cartStoreId());
+  return `
+    ${Header('注文内容の確認', {backTo:'delivery', hideCart:true})}
+    <div class="section">
+      <div class="receipt" style="margin:0 0 14px;">
+        <div class="line"><span>お届け先</span><b>${state.hotel.name}</b></div>
+        <div class="line"><span>部屋</span><b>${state.roomType} / ${state.room}号室</b></div>
+        <div class="line"><span>お名前</span><b>${state.guestName||'（未入力）'}</b></div>
+        ${state.note?`<div class="line"><span>ご要望</span><b>${state.note}</b></div>`:''}
+      </div>
+      <div class="section-title">${store?store.name:''}</div>
+      ${state.cart.map(c=>{
+        const p=getProduct(c.storeId,c.productId);
+        return `<div class="summary-row"><span>${p.name} × ${c.qty}</span><span>${formatYen(p.price*c.qty)}</span></div>`;
+      }).join('')}
+      <div class="summary-row"><span>配送料</span><span>${formatYen(300)}</span></div>
+      <div class="summary-row total"><span>合計金額</span><span>${formatYen(cartTotal()+300)}</span></div>
+      <button class="cta" onclick="placeOrder()">この内容で注文を確定する</button>
+      <button class="cta secondary" onclick="goTo('delivery')">配送先を修正する</button>
+    </div>
+  `;
+}
+
+function renderConfirm(){
+  const o = state.order;
+  if(!o) return renderEmpty('📭','注文情報がありません','top','トップへ戻る');
+  startStatusAutoAdvance();
+  return `
+    <div class="order-hero">
+      <div class="ok-circle">✅</div>
+      <div style="font-weight:800;font-size:18px;">ご注文ありがとうございます！</div>
+      <div class="order-no">${o.no}</div>
+    </div>
+    <div class="receipt">
+      <div class="line"><span>お届け先</span><b>${o.hotel.name} ${o.roomType} / ${o.room}号室</b></div>
+      <div class="line"><span>ご注文店舗</span><b>${o.storeName}</b></div>
+      <div class="line"><span>ご注文点数</span><b>${o.items.reduce((s,i)=>s+i.qty,0)}点</b></div>
+      <div class="line"><span>合計金額</span><b>${formatYen(o.total+300)}</b></div>
+      <div class="line"><span>予想お届け時間</span><b>25〜40分</b></div>
+    </div>
+    <div class="section">
+      <button class="cta" onclick="goTo('status')">配達状況を確認する</button>
+      <button class="cta secondary" onclick="goTo('top')">トップへ戻る</button>
+    </div>
+  `;
+}
+
+function renderStatus(){
+  const o = state.order;
+  if(!o) return renderEmpty('📭','進行中の注文はありません','top','トップへ戻る');
+  const cur = STATUS_STEPS[o.statusIndex];
+  return `
+    ${Header('注文状況', {backTo:'top', hideCart:true})}
+    <div class="status-hero">
+      <div style="font-size:12px;color:var(--text-sub);margin-bottom:8px;">${o.no}</div>
+      <div class="status-badge" style="background:${cur.color}">${cur.icon} ${cur.label}</div>
+    </div>
+    ${o.statusIndex>=2 && o.statusIndex<3 ? `
+      <div class="map-mock">
+        🗺️ ${o.hotel.name} へ配達中...
+        <div class="bike">🛵</div>
+      </div>
+    `:''}
+    <div class="timeline">
+      ${STATUS_STEPS.map((st,i)=>`
+        <div class="tl-step ${i<o.statusIndex?'done':i===o.statusIndex?'active':''}">
+          <div>
+            <div class="tl-dot">${i<=o.statusIndex?st.icon:''}</div>
+            <div class="tl-line"></div>
+          </div>
+          <div class="tl-text">
+            <div class="tt">${st.label}</div>
+            <div class="ts">${i<o.statusIndex?'完了':i===o.statusIndex?'進行中...':'待機中'}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="section">
+      <div class="receipt" style="margin:0 0 14px;">
+        <div class="line"><span>お届け先</span><b>${o.hotel.name} ${o.room}号室</b></div>
+        <div class="line"><span>ご注文店舗</span><b>${o.storeName}</b></div>
+        <div class="line"><span>合計金額</span><b>${formatYen(o.total+300)}</b></div>
+      </div>
+      ${o.statusIndex>=STATUS_STEPS.length-1 ? `<button class="cta" onclick="goTo('top')">またのご利用をお待ちしております</button>` : `<div style="text-align:center;font-size:11.5px;color:var(--text-sub);">数秒ごとに自動更新されます（デモ用シミュレーション）</div>`}
+    </div>
+  `;
+}
+
+function renderEmpty(icon,msg,to,label){
+  return `<div class="empty"><div class="ic">${icon}</div><div>${msg}</div><button class="cta" style="margin-top:20px;" onclick="goTo('${to}')">${label||'戻る'}</button></div>`;
+}
+
+const SCREENS = {
+  top: renderTop,
+  storeList: renderStoreList,
+  storeDetail: renderStoreDetail,
+  productDetail: renderProductDetail,
+  cart: renderCart,
+  delivery: renderDelivery,
+  reviewOrder: renderReviewOrder,
+  confirm: renderConfirm,
+  status: renderStatus,
+};
+
+function render(){
+  const app = document.getElementById('app');
+  const fn = SCREENS[state.screen] || renderTop;
+  app.innerHTML = fn();
+}
+
+render();
+</script>
+</body>
+</html>
