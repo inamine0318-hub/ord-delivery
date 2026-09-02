@@ -15,8 +15,14 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { Client, Environment } from 'square';
 import { messagingApi } from '@line/bot-sdk';
+import PDFDocument from 'pdfkit';
+
+// PDFKit標準フォント(Helvetica)は日本語非対応のため、同梱のNoto Sans JP（OFLライセンス、
+// 再配布可）を明示的に指定する。CJKフォント未指定のままdoc.text()すると文字化けする。
+const JP_FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'NotoSansJP-Regular.otf');
 import { db } from './db';
 import { hashPassword, verifyPassword, signToken, verifyToken, requireAuth } from './auth';
 
@@ -510,6 +516,126 @@ app.get('/api/drivers/:id/settlement', requireAuth('ADMIN', 'DRIVER'), (req: Req
   });
 });
 
+// ============================================================
+// 精算のCSV・PDF出力（加盟店への請求・配送パートナー報酬の証憑として使用）
+// ============================================================
+function csvCell(value: string | number): string {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function csvRow(values: Array<string | number>): string {
+  return values.map(csvCell).join(',') + '\r\n';
+}
+
+app.get('/api/stores/:id/settlement.csv', requireAuth('ADMIN', 'STORE'), (req: Request, res: Response) => {
+  const storeId = Number(req.params.id);
+  if (req.auth!.role === 'STORE' && req.auth!.id !== storeId) return res.status(403).send('他の加盟店の精算情報は閲覧できません');
+  const store = getStoreById(storeId);
+  if (!store) return res.status(404).send('加盟店が見つかりません');
+
+  const completed = getAllOrders().filter(o => o.storeId === storeId && o.status === 'COMPLETED' && o.totalMoney);
+  let csv = '﻿'; // Excelでの文字化け防止のBOM
+  csv += csvRow(['注文ID', '完了日時', 'お届け先', '商品', '注文金額', `ORD手数料(${Math.round(store.commissionRate * 100)}%)`, '加盟店お支払額']);
+  completed.forEach(o => {
+    const gross = o.totalMoney?.amount || 0;
+    const commission = Math.round(gross * store.commissionRate);
+    csv += csvRow([
+      o.id,
+      o.completedAt || '',
+      `${o.villaName} / ${o.roomNumber}`,
+      o.items.map(i => `${i.name}×${i.quantity}`).join('; '),
+      gross,
+      commission,
+      gross - commission,
+    ]);
+  });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="settlement_store${storeId}.csv"`);
+  res.send(csv);
+});
+
+app.get('/api/drivers/:id/settlement.csv', requireAuth('ADMIN', 'DRIVER'), (req: Request, res: Response) => {
+  const driverId = Number(req.params.id);
+  if (req.auth!.role === 'DRIVER' && req.auth!.id !== driverId) return res.status(403).send('他の配送パートナーの精算情報は閲覧できません');
+  const driver = getDriverById(driverId);
+  if (!driver) return res.status(404).send('ドライバーが見つかりません');
+
+  const completed = getAllOrders().filter(o => o.driverId === driverId && o.status === 'COMPLETED');
+  let csv = '﻿';
+  csv += csvRow(['注文ID', '完了日時', 'お届け先', '報酬単価', '報酬額']);
+  completed.forEach(o => {
+    csv += csvRow([o.id, o.completedAt || '', `${o.villaName} / ${o.roomNumber}`, DRIVER_PAYOUT_PER_DELIVERY, DRIVER_PAYOUT_PER_DELIVERY]);
+  });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="settlement_driver${driverId}.csv"`);
+  res.send(csv);
+});
+
+app.get('/api/stores/:id/settlement.pdf', requireAuth('ADMIN', 'STORE'), (req: Request, res: Response) => {
+  const storeId = Number(req.params.id);
+  if (req.auth!.role === 'STORE' && req.auth!.id !== storeId) return res.status(403).send('他の加盟店の精算情報は閲覧できません');
+  const store = getStoreById(storeId);
+  if (!store) return res.status(404).send('加盟店が見つかりません');
+
+  const completed = getAllOrders().filter(o => o.storeId === storeId && o.status === 'COMPLETED' && o.totalMoney);
+  const grossAmount = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
+  const commissionAmount = Math.round(grossAmount * store.commissionRate);
+  const netPayout = grossAmount - commissionAmount;
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="settlement_store${storeId}.pdf"`);
+  const doc = new PDFDocument({ margin: 40 });
+  doc.font(JP_FONT_PATH);
+  doc.pipe(res);
+  doc.fontSize(18).text('ORD 加盟店様お支払明細書', { align: 'center' });
+  doc.moveDown();
+  doc.fontSize(11);
+  doc.text(`加盟店: ${store.name}（手数料率 ${Math.round(store.commissionRate * 100)}%）`);
+  doc.text(`発行日: ${new Date().toISOString().slice(0, 10)}`);
+  doc.text(`対象注文件数: ${completed.length}件`);
+  doc.moveDown();
+  doc.text(`売上合計: ¥${grossAmount.toLocaleString('ja-JP')}`);
+  doc.text(`ORD手数料: ¥${commissionAmount.toLocaleString('ja-JP')}`);
+  doc.fontSize(13).text(`お支払額: ¥${netPayout.toLocaleString('ja-JP')}`, { underline: true });
+  doc.moveDown();
+  doc.fontSize(9).text('内訳', { underline: true });
+  completed.forEach(o => {
+    const gross = o.totalMoney?.amount || 0;
+    doc.text(`#${o.id}  ${o.completedAt ? o.completedAt.slice(0, 16).replace('T', ' ') : ''}  ${o.villaName}  ¥${gross.toLocaleString('ja-JP')}`);
+  });
+  doc.end();
+});
+
+app.get('/api/drivers/:id/settlement.pdf', requireAuth('ADMIN', 'DRIVER'), (req: Request, res: Response) => {
+  const driverId = Number(req.params.id);
+  if (req.auth!.role === 'DRIVER' && req.auth!.id !== driverId) return res.status(403).send('他の配送パートナーの精算情報は閲覧できません');
+  const driver = getDriverById(driverId);
+  if (!driver) return res.status(404).send('ドライバーが見つかりません');
+
+  const completed = getAllOrders().filter(o => o.driverId === driverId && o.status === 'COMPLETED');
+  const payoutAmount = completed.length * DRIVER_PAYOUT_PER_DELIVERY;
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="settlement_driver${driverId}.pdf"`);
+  const doc = new PDFDocument({ margin: 40 });
+  doc.font(JP_FONT_PATH);
+  doc.pipe(res);
+  doc.fontSize(18).text('ORD 配送パートナー報酬明細書', { align: 'center' });
+  doc.moveDown();
+  doc.fontSize(11);
+  doc.text(`配送パートナー: ${driver.name}`);
+  doc.text(`発行日: ${new Date().toISOString().slice(0, 10)}`);
+  doc.text(`完了配達件数: ${completed.length}件（単価 ¥${DRIVER_PAYOUT_PER_DELIVERY.toLocaleString('ja-JP')}）`);
+  doc.moveDown();
+  doc.fontSize(13).text(`お支払額: ¥${payoutAmount.toLocaleString('ja-JP')}`, { underline: true });
+  doc.moveDown();
+  doc.fontSize(9).text('内訳', { underline: true });
+  completed.forEach(o => {
+    doc.text(`#${o.id}  ${o.completedAt ? o.completedAt.slice(0, 16).replace('T', ' ') : ''}  ${o.villaName}  ¥${DRIVER_PAYOUT_PER_DELIVERY.toLocaleString('ja-JP')}`);
+  });
+  doc.end();
+});
+
 // 経営サマリー（全加盟店・全ドライバー合算のORD粗利）
 function revenueSummary() {
   const allOrders = getAllOrders();
@@ -655,14 +781,172 @@ app.get('/api/kpi', requireAuth('ADMIN'), (_req: Request, res: Response) => {
 });
 
 // ============================================================
+// 地図連携：加盟店・配達先・配送パートナーを一画面で確認する
+// 【重要】Google Maps APIキーが未提供のため、Google Maps JavaScript APIは使用していません。
+// 代わりにAPIキー不要のOpenStreetMap（Leaflet.js）を使用しています。また、実際のGPS座標も
+// まだ取得できていないため、エリア名（恩納村・北谷町等）の市町村中心座標＋簡易オフセットによる
+// 「おおよその位置」表示です。実際の正確な現在地ではありません（Phase2でGPS連携が入り次第、
+// 正確な位置に置き換え可能な設計にしてあります）。
+// ============================================================
+const AREA_COORDS: Record<string, { lat: number; lng: number }> = {
+  恩納村: { lat: 26.5039, lng: 127.8419 },
+  読谷村: { lat: 26.3953, lng: 127.7369 },
+  名護市: { lat: 26.5917, lng: 127.9767 },
+  北谷町: { lat: 26.3122, lng: 127.7639 },
+};
+function approxLocation(area: string | null, seed: number): { lat: number; lng: number; approx: boolean } {
+  const base = (area && AREA_COORDS[area]) || AREA_COORDS['恩納村'];
+  // 同一エリア内の複数地点が完全に重ならないよう、id由来の小さな決定的オフセットを加える
+  const offset = ((seed % 7) - 3) * 0.006;
+  return { lat: base.lat + offset, lng: base.lng + offset * 0.6, approx: true };
+}
+app.get('/api/map/overview', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  const allOrders = getAllOrders();
+  const stores = getAllStores().map(s => ({ type: 'store', id: s.id, name: s.name, area: s.area, ...approxLocation(s.area, s.id) }));
+  const drivers = getAllDrivers().map(d => ({
+    type: 'driver',
+    id: d.id,
+    name: d.name,
+    area: d.area,
+    status: d.status,
+    ...approxLocation(d.area, d.id + 100),
+  }));
+  const activeOrders = allOrders
+    .filter(o => o.status !== 'COMPLETED')
+    .map(o => ({
+      type: 'order',
+      id: o.id,
+      villaName: o.villaName,
+      status: o.status,
+      area: o.area,
+      ...approxLocation(o.area, o.id + 200),
+    }));
+  res.json({ ok: true, stores, drivers, orders: activeOrders });
+});
+
+// ============================================================
+// 通知強化：注文遅延・加盟店未確認・ドライバー未応答を自動検知する
+// 【注意】専用の運営(オペレーション)用LINEアカウントが未整備のため、OPS_LINE_USER_ID が
+// 設定されていればそこへLINE通知、未設定時は/adminのアラートパネルとコンソールログのみ。
+// ============================================================
+const ALERT_THRESHOLD_MINUTES = {
+  orderNotDispatched: 10, // 注文受付のまま未手配
+  storeNotConfirmed: 15, // 手配後、加盟店が調理開始/完了の反応をしていない
+  driverNotResponding: 15, // 手配後、配送パートナーが受託・集荷していない
+};
+const OPS_LINE_USER_ID = process.env.OPS_LINE_USER_ID || '';
+interface AlertItem {
+  orderId: number;
+  type: 'ORDER_NOT_DISPATCHED' | 'STORE_NOT_CONFIRMED' | 'DRIVER_NOT_RESPONDING';
+  message: string;
+  minutesElapsed: number;
+}
+function minutesSince(iso: string): number {
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+}
+function computeAlerts(): AlertItem[] {
+  const alerts: AlertItem[] = [];
+  for (const o of getAllOrders()) {
+    if (o.status === 'RECEIVED') {
+      const elapsed = minutesSince(o.createdAt);
+      if (elapsed >= ALERT_THRESHOLD_MINUTES.orderNotDispatched) {
+        alerts.push({ orderId: o.id, type: 'ORDER_NOT_DISPATCHED', message: `注文#${o.id}（${o.villaName}）が受付から${elapsed}分間未手配です`, minutesElapsed: elapsed });
+      }
+    } else if (o.status === 'PREPARING') {
+      const elapsed = minutesSince(o.createdAt);
+      if (elapsed >= ALERT_THRESHOLD_MINUTES.storeNotConfirmed) {
+        alerts.push({ orderId: o.id, type: 'STORE_NOT_CONFIRMED', message: `注文#${o.id}（${o.villaName}）は手配後${elapsed}分経過していますが加盟店の調理完了確認がありません`, minutesElapsed: elapsed });
+      }
+      if (elapsed >= ALERT_THRESHOLD_MINUTES.driverNotResponding) {
+        alerts.push({ orderId: o.id, type: 'DRIVER_NOT_RESPONDING', message: `注文#${o.id}（${o.villaName}）は手配後${elapsed}分経過していますが配送パートナーが応答していません`, minutesElapsed: elapsed });
+      }
+    }
+  }
+  return alerts;
+}
+// 同じアラートを繰り返し通知しないための既送信済みキー集合（インメモリ、サーバー再起動でリセット）
+const notifiedAlertKeys = new Set<string>();
+async function checkAlertsAndNotify() {
+  for (const alert of computeAlerts()) {
+    const key = `${alert.orderId}:${alert.type}`;
+    if (notifiedAlertKeys.has(key)) continue;
+    notifiedAlertKeys.add(key);
+    console.warn(`[運営アラート] ${alert.message}`);
+    if (OPS_LINE_USER_ID) {
+      try {
+        await pushLine(OPS_LINE_USER_ID, {
+          type: 'flex',
+          altText: `【ORD運営アラート】${alert.message}`,
+          contents: {
+            type: 'bubble',
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [{ type: 'text', text: `⚠️ ${alert.message}`, wrap: true, weight: 'bold' }],
+            },
+          },
+        });
+      } catch (e) {
+        console.error('[運営アラートLINE通知エラー]', e);
+      }
+    }
+  }
+}
+setInterval(() => {
+  checkAlertsAndNotify().catch(e => console.error('[アラートチェックエラー]', e));
+}, 60 * 1000);
+
+app.get('/api/alerts', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json({ ok: true, alerts: computeAlerts() });
+});
+
+// ============================================================
+// 分析：売れ筋ランキング・時間帯分析・曜日分析・リピート率
+// 【注意】実運用データが十分に蓄積されるまでは統計的な集計であり、機械学習による
+// 需要予測ではありません。データ量が増えた段階で本格的な予測モデルの導入を検討してください。
+// ============================================================
+const DOW_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+function analyticsDashboard() {
+  const allOrders = getAllOrders();
+
+  const itemCounts = new Map<string, number>();
+  allOrders.forEach(o => o.items.forEach(i => itemCounts.set(i.name, (itemCounts.get(i.name) || 0) + Number(i.quantity || '1'))));
+  const topItems = [...itemCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+
+  const hourly = Array.from({ length: 24 }, () => 0);
+  const byDow = Array.from({ length: 7 }, () => 0);
+  allOrders.forEach(o => {
+    const d = new Date(o.createdAt);
+    hourly[d.getHours()]++;
+    byDow[d.getDay()]++;
+  });
+  const hourlyDistribution = hourly.map((count, hour) => ({ hour, count }));
+  const dayOfWeekDistribution = byDow.map((count, i) => ({ day: DOW_LABELS[i], count }));
+
+  // リピート率：ヴィラ名+部屋番号を簡易的な「同一お客様」の代替キーとして使用
+  // （会員アカウント等の永続的な顧客IDが未実装のための近似指標）
+  const guestKey = (o: Order) => `${o.villaName}::${o.roomNumber}`;
+  const guestOrderCounts = new Map<string, number>();
+  allOrders.forEach(o => guestOrderCounts.set(guestKey(o), (guestOrderCounts.get(guestKey(o)) || 0) + 1));
+  const totalGuests = guestOrderCounts.size;
+  const repeatGuests = [...guestOrderCounts.values()].filter(c => c > 1).length;
+  const repeatRate = totalGuests > 0 ? Math.round((repeatGuests / totalGuests) * 100) : 0;
+
+  return { topItems, hourlyDistribution, dayOfWeekDistribution, repeatRate, totalGuests, repeatGuests };
+}
+app.get('/api/analytics', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json({ ok: true, ...analyticsDashboard() });
+});
+
+// ============================================================
 // 管理画面（ログイン必須。Cookie(ord_admin_session)にJWTを保持する）
 // ============================================================
 function renderAdminLoginHtml(error?: string): string {
   return `<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8"><title>ORD 管理者ログイン</title>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ORD 管理者ログイン</title>
 <style>
-body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;background:#14181C;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
-form{background:#fff;color:#1F2D3A;padding:32px;border-radius:12px;width:280px;}
+body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;background:#14181C;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px;}
+form{background:#fff;color:#1F2D3A;padding:32px;border-radius:12px;width:280px;max-width:100%;}
 h2{margin-top:0;font-size:16px;}
 input{width:100%;box-sizing:border-box;padding:10px;margin-bottom:10px;border:1px solid #E7E0D2;border-radius:6px;font-size:13px;}
 button{width:100%;padding:10px;background:#0086A8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;}
@@ -670,7 +954,7 @@ button{width:100%;padding:10px;background:#0086A8;color:#fff;border:none;border-
 </style></head>
 <body>
 <form method="POST" action="/admin/login">
-  <h2>ORD 管理者ログイン</h2>
+  <h2>🌺 ORD 管理者ログイン</h2>
   ${error ? `<div class="err">${error}</div>` : ''}
   <input name="username" placeholder="ユーザー名" autofocus>
   <input name="password" type="password" placeholder="パスワード">
@@ -753,89 +1037,178 @@ function renderAdminHtml(): string {
 
   const rev = revenueSummary();
   const storeSettlementRows = stores
-    .map(s => `<li>${s.name}（手数料率${Math.round(s.commissionRate * 100)}%） <button onclick="viewStoreSettlement(${s.id})">精算を見る</button></li>`)
+    .map(
+      s => `<li>${s.name}（手数料率${Math.round(s.commissionRate * 100)}%・${s.area}）
+      <button onclick="viewStoreSettlement(${s.id})">精算を見る</button>
+      <a class="btn secondary" href="/api/stores/${s.id}/settlement.csv">CSV</a>
+      <a class="btn secondary" href="/api/stores/${s.id}/settlement.pdf">PDF</a></li>`
+    )
     .join('');
   const driverSettlementRows = drivers
-    .map(d => `<li>${d.name} <button onclick="viewDriverSettlement(${d.id})">精算を見る</button></li>`)
+    .map(
+      d => `<li>${d.name}（${d.area}）
+      <button onclick="viewDriverSettlement(${d.id})">精算を見る</button>
+      <a class="btn secondary" href="/api/drivers/${d.id}/settlement.csv">CSV</a>
+      <a class="btn secondary" href="/api/drivers/${d.id}/settlement.pdf">PDF</a></li>`
+    )
     .join('');
 
+  const alerts = computeAlerts();
+  const alertsHtml = alerts.length
+    ? alerts.map(a => `<div class="alert-item">⚠️ ${a.message}</div>`).join('')
+    : `<p>現在アラートはありません（未手配${ALERT_THRESHOLD_MINUTES.orderNotDispatched}分・加盟店未確認/配送未応答${ALERT_THRESHOLD_MINUTES.storeNotConfirmed}分を超えると表示されます）</p>`;
+
+  const analytics = analyticsDashboard();
+  const maxItemCount = Math.max(1, ...analytics.topItems.map(i => i.count));
+  const topItemsHtml =
+    analytics.topItems
+      .map(
+        i => `<div class="bar-row"><span style="width:110px;">${i.name}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round((i.count / maxItemCount) * 100)}%"></div></div><span>${i.count}</span></div>`
+      )
+      .join('') || '<p>データがありません</p>';
+  const maxHourCount = Math.max(1, ...analytics.hourlyDistribution.map(h => h.count));
+  const hourlyHtml = analytics.hourlyDistribution
+    .filter(h => h.count > 0)
+    .map(
+      h => `<div class="bar-row"><span style="width:50px;">${h.hour}時台</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round((h.count / maxHourCount) * 100)}%"></div></div><span>${h.count}</span></div>`
+    )
+    .join('') || '<p>データがありません</p>';
+  const maxDowCount = Math.max(1, ...analytics.dayOfWeekDistribution.map(d => d.count));
+  const dowHtml = analytics.dayOfWeekDistribution
+    .map(
+      d => `<div class="bar-row"><span style="width:30px;">${d.day}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round((d.count / maxDowCount) * 100)}%"></div></div><span>${d.count}</span></div>`
+    )
+    .join('');
+
+  const mapStores = stores.map(s => ({ ...approxLocation(s.area, s.id), name: s.name, kind: 'store', detail: s.area }));
+  const mapDrivers = drivers.map(d => ({ ...approxLocation(d.area, d.id + 100), name: d.name, kind: 'driver', detail: `${d.status}・${d.area}` }));
+  const mapOrders = orders
+    .filter(o => o.status !== 'COMPLETED')
+    .map(o => ({ ...approxLocation(o.area, o.id + 200), name: o.villaName, kind: 'order', detail: o.status }));
+  const mapDataJson = JSON.stringify([...mapStores, ...mapDrivers, ...mapOrders]);
+
   return `<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8"><title>ORD 受注管理（TypeScript版）</title>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORD 受注管理</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;padding:24px;background:#f7f6f2;color:#1F2D3A;}
-h2{margin-bottom:4px;} p{color:#6B7680;font-size:13px;}
-table{width:100%;border-collapse:collapse;background:#fff;margin-top:16px;}
-th,td{border:1px solid #E7E0D2;padding:8px;font-size:13px;text-align:left;vertical-align:top;}
-th{background:#14181C;color:#fff;}
-button{background:#0086A8;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12.5px;}
-select{font-size:12px;margin-bottom:4px;display:block;}
-.badge{display:inline-block;background:#E8A33D;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;}
-fieldset{background:#fff;border:1px solid #E7E0D2;border-radius:8px;padding:12px;margin-bottom:16px;}
-input{padding:6px;font-size:12.5px;margin-right:6px;}
-.logout{float:right;font-size:12px;color:#0086A8;}
+:root{--ocean:#0086A8;--palm:#2E9E6B;--gold:#C9A15A;--ink:#14181C;--bg:#F7F6F2;--card:#FFFFFF;--text:#1F2D3A;--sub:#6B7680;--border:#E7E0D2;}
+[data-theme="dark"]{--bg:#0F1216;--card:#1B2027;--text:#EDEFF2;--sub:#9AA4AE;--border:#2A313A;}
+*{box-sizing:border-box;}
+body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;margin:0;padding:20px;background:var(--bg);color:var(--text);}
+h1{font-size:19px;margin:0;} h3{margin:0 0 10px;font-size:14px;}
+p{color:var(--sub);font-size:13px;margin:4px 0;} b{color:var(--text);}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
+.badge{display:inline-block;background:var(--gold);color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;margin-right:4px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
+.card.full{grid-column:1/-1;}
+input,select{padding:7px;font-size:12.5px;margin:0 4px 6px 0;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);}
+button,.btn{background:var(--ocean);color:#fff;border:none;padding:7px 13px;border-radius:6px;cursor:pointer;font-size:12.5px;text-decoration:none;display:inline-block;}
+button.secondary,.btn.secondary{background:var(--sub);}
+ul{padding-left:18px;margin:6px 0;} li{font-size:12.5px;margin-bottom:6px;}
+.alert-item{background:#FDECEA;color:#B3261E;padding:8px 10px;border-radius:8px;font-size:12.5px;margin-bottom:6px;}
+[data-theme="dark"] .alert-item{background:#3A1F1E;color:#FF8A80;}
+.bar-row{display:flex;align-items:center;gap:8px;font-size:12px;margin:4px 0;color:var(--text);}
+.bar-track{flex:1;background:var(--border);border-radius:4px;height:10px;overflow:hidden;}
+.bar-fill{background:var(--palm);height:100%;}
+.table-scroll{overflow-x:auto;border-radius:8px;}
+table{width:100%;border-collapse:collapse;background:var(--card);min-width:820px;}
+th,td{border:1px solid var(--border);padding:8px;font-size:12.5px;text-align:left;vertical-align:top;}
+th{background:var(--ink);color:#fff;}
+#map{height:320px;border-radius:8px;}
+.theme-toggle{cursor:pointer;font-size:16px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;}
+.logout{font-size:12px;color:var(--ocean);text-decoration:none;}
+@media(max-width:640px){body{padding:12px;} .grid{grid-template-columns:1fr;}}
 </style></head>
 <body>
-<a class="logout" href="/admin/logout">ログアウト</a>
-<h2>ORD 受注管理（TypeScript版）</h2>
-<p>Square連携: <span class="badge">${squareConfigured ? '実接続' : '未設定（Webhookペイロードのデータのみ使用）'}</span>
-LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}</span></p>
+<div class="topbar">
+  <div><h1>🌺 ORD 受注管理</h1>
+  <span class="badge">Square: ${squareConfigured ? '実接続' : '未設定'}</span>
+  <span class="badge">LINE: ${lineConfigured ? '実送信' : '未設定'}</span></div>
+  <div><button class="theme-toggle" onclick="toggleTheme()">🌓 表示切替</button> <a class="logout" href="/admin/logout">ログアウト</a></div>
+</div>
 
-<fieldset>
-  <legend>本日のKPI</legend>
-  <p>本日注文数: <b>${kpi.todayOrderCount}</b>件　本日売上: <b>${yen(kpi.todayRevenue)}</b></p>
-  <p>平均配達時間（全期間・完了注文ベース）: <b>${kpi.avgDeliveryMinutes != null ? kpi.avgDeliveryMinutes + '分' : '(データなし)'}</b></p>
-  <p>ドライバー稼働率: <b>${kpi.driverUtilizationRate}%</b>（稼働中${kpi.busyDriverCount}/${kpi.totalDriverCount}名）</p>
-  <p>加盟店ランキング（全期間売上順）:</p>
-  <ul>${storeRankingRows || '<li>(データなし)</li>'}</ul>
-</fieldset>
+${alerts.length ? `<div class="card full" style="border-color:#B3261E;"><h3>⚠️ 運営アラート</h3>${alertsHtml}</div>` : ''}
 
-<fieldset>
-  <legend>経営サマリー（完了注文ベース・概算）</legend>
-  <p>完了注文数: <b>${rev.completedOrderCount}</b>件　総売上(GMV): <b>${yen(rev.grossAmount)}</b></p>
-  <p>ORD手数料収益: <b>${yen(rev.commissionAmount)}</b>　配送パートナー報酬支払: <b>${yen(rev.driverPayoutTotal)}</b></p>
-  <p>ORD粗利（手数料収益－配送報酬）: <b style="color:#0086A8;">${yen(rev.ordGrossProfit)}</b></p>
-</fieldset>
+<div class="grid">
+  <div class="card">
+    <h3>📊 本日のKPI</h3>
+    <p>本日注文数: <b>${kpi.todayOrderCount}</b>件　本日売上: <b>${yen(kpi.todayRevenue)}</b></p>
+    <p>平均配達時間（全期間）: <b>${kpi.avgDeliveryMinutes != null ? kpi.avgDeliveryMinutes + '分' : '(データなし)'}</b></p>
+    <p>ドライバー稼働率: <b>${kpi.driverUtilizationRate}%</b>（稼働中${kpi.busyDriverCount}/${kpi.totalDriverCount}名）</p>
+    <p>加盟店ランキング（全期間売上順）:</p>
+    <ul>${storeRankingRows || '<li>(データなし)</li>'}</ul>
+  </div>
 
-<fieldset>
-  <legend>加盟店 登録</legend>
-  <input id="store-name" placeholder="店舗名">
-  <input id="store-line" placeholder="LINE User ID">
-  <input id="store-commission" placeholder="手数料率(%) 例:15" style="width:110px;">
-  <input id="store-area" placeholder="主なエリア 例:恩納村" style="width:130px;">
-  <input id="store-username" placeholder="ログインID">
-  <input id="store-password" type="password" placeholder="パスワード">
-  <button onclick="createStore()">登録</button>
-  <p>登録済み: ${stores.map(s => `${s.name}(${s.area})`).join('、') || '(なし)'}</p>
-  <ul>${storeSettlementRows || '<li>(なし)</li>'}</ul>
-</fieldset>
+  <div class="card">
+    <h3>💰 経営サマリー（完了注文ベース・概算）</h3>
+    <p>完了注文数: <b>${rev.completedOrderCount}</b>件　総売上(GMV): <b>${yen(rev.grossAmount)}</b></p>
+    <p>ORD手数料収益: <b>${yen(rev.commissionAmount)}</b>　配送報酬支払: <b>${yen(rev.driverPayoutTotal)}</b></p>
+    <p>ORD粗利: <b style="color:var(--ocean);">${yen(rev.ordGrossProfit)}</b></p>
+  </div>
 
-<fieldset>
-  <legend>配送パートナー 登録</legend>
-  <input id="driver-name" placeholder="ドライバー名">
-  <input id="driver-line" placeholder="LINE User ID">
-  <input id="driver-area" placeholder="主な稼働エリア 例:恩納村" style="width:150px;">
-  <input id="driver-username" placeholder="ログインID">
-  <input id="driver-password" type="password" placeholder="パスワード">
-  <button onclick="createDriver()">登録</button>
-  <p>登録済み: ${drivers.map(d => `${d.name}(${d.status}・${d.area})`).join('、') || '(なし)'}</p>
-  <ul>${driverSettlementRows || '<li>(なし)</li>'}</ul>
-</fieldset>
+  <div class="card">
+    <h3>📈 分析（売れ筋・時間帯・曜日・リピート率）</h3>
+    <p>売れ筋ランキング:</p>
+    ${topItemsHtml}
+    <p style="margin-top:10px;">時間帯別注文数:</p>
+    ${hourlyHtml}
+    <p style="margin-top:10px;">曜日別注文数:</p>
+    ${dowHtml}
+    <p style="margin-top:10px;">リピート率: <b>${analytics.repeatRate}%</b>（${analytics.repeatGuests}/${analytics.totalGuests}組、ヴィラ名+部屋番号ベースの簡易集計）</p>
+  </div>
 
-<fieldset>
-  <legend>収益シミュレーター（実データ不要・想定値から試算）</legend>
-  <input id="sim-dailyOrders" placeholder="1日あたり注文数" value="20" style="width:150px;">
-  <input id="sim-avgOrderValue" placeholder="客単価(円)" value="2500" style="width:120px;">
-  <input id="sim-commissionRate" placeholder="手数料率(%)" value="15" style="width:110px;">
-  <input id="sim-days" placeholder="日数" value="30" style="width:80px;">
-  <input id="sim-driverPayout" placeholder="配送報酬/件(円)" value="400" style="width:130px;">
-  <button onclick="runSimulator()">試算する</button>
-  <p id="sim-result" style="white-space:pre-wrap;"></p>
-</fieldset>
+  <div class="card">
+    <h3>🗺️ 地図（加盟店・配送パートナー・お届け先の概況）</h3>
+    <p>※Google Maps APIキー未設定のためOpenStreetMapを使用。エリア中心座標からの概算位置です（実際の正確な位置ではありません）</p>
+    <div id="map"></div>
+  </div>
 
-<table>
-<tr><th>ID</th><th>Square注文ID</th><th>お届け先</th><th>商品</th><th>金額</th><th>状態</th><th>加盟店/ドライバー割当</th><th>操作</th></tr>
-${rows || '<tr><td colspan="8">注文はまだありません（README.mdのcurlコマンドでテスト送信できます）</td></tr>'}
-</table>
+  <div class="card">
+    <h3>🏪 加盟店 登録</h3>
+    <input id="store-name" placeholder="店舗名">
+    <input id="store-line" placeholder="LINE User ID">
+    <input id="store-commission" placeholder="手数料率(%) 例:15" style="width:110px;">
+    <input id="store-area" placeholder="主なエリア 例:恩納村" style="width:130px;">
+    <input id="store-username" placeholder="ログインID">
+    <input id="store-password" type="password" placeholder="パスワード">
+    <button onclick="createStore()">登録</button>
+    <ul>${storeSettlementRows || '<li>(なし)</li>'}</ul>
+  </div>
+
+  <div class="card">
+    <h3>🛵 配送パートナー 登録</h3>
+    <input id="driver-name" placeholder="ドライバー名">
+    <input id="driver-line" placeholder="LINE User ID">
+    <input id="driver-area" placeholder="主な稼働エリア 例:恩納村" style="width:150px;">
+    <input id="driver-username" placeholder="ログインID">
+    <input id="driver-password" type="password" placeholder="パスワード">
+    <button onclick="createDriver()">登録</button>
+    <ul>${driverSettlementRows || '<li>(なし)</li>'}</ul>
+  </div>
+
+  <div class="card">
+    <h3>🎛 収益シミュレーター（実データ不要・想定値から試算）</h3>
+    <input id="sim-dailyOrders" placeholder="1日あたり注文数" value="20" style="width:150px;">
+    <input id="sim-avgOrderValue" placeholder="客単価(円)" value="2500" style="width:120px;">
+    <input id="sim-commissionRate" placeholder="手数料率(%)" value="15" style="width:110px;">
+    <input id="sim-days" placeholder="日数" value="30" style="width:80px;">
+    <input id="sim-driverPayout" placeholder="配送報酬/件(円)" value="400" style="width:130px;">
+    <button onclick="runSimulator()">試算する</button>
+    <p id="sim-result" style="white-space:pre-wrap;"></p>
+  </div>
+</div>
+
+<div class="card full">
+  <h3>📦 注文一覧</h3>
+  <div class="table-scroll">
+  <table>
+  <tr><th>ID</th><th>Square注文ID</th><th>お届け先</th><th>商品</th><th>金額</th><th>状態</th><th>加盟店/ドライバー割当</th><th>操作</th></tr>
+  ${rows || '<tr><td colspan="8">注文はまだありません（README.mdのcurlコマンドでテスト送信できます）</td></tr>'}
+  </table>
+  </div>
+</div>
 
 <script>
 async function createStore(){
@@ -903,6 +1276,38 @@ async function dispatchOrder(id){
   alert(data.ok ? '手配完了：LINE通知を送信しました' : 'エラー: '+data.error);
   location.reload();
 }
+function toggleTheme(){
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('ord_admin_theme', next); } catch(e) {}
+}
+(function initTheme(){
+  try {
+    const saved = localStorage.getItem('ord_admin_theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+    else if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.setAttribute('data-theme', 'dark');
+  } catch(e) {}
+})();
+</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function initMap(){
+  const points = ${mapDataJson};
+  if (!points.length || !window.L) return;
+  const map = L.map('map').setView([points[0].lat, points[0].lng], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 18,
+  }).addTo(map);
+  const colors = { store: '#C9A15A', driver: '#0086A8', order: '#2E9E6B' };
+  const icons = { store: '🏪', driver: '🛵', order: '📦' };
+  points.forEach(p => {
+    L.circleMarker([p.lat, p.lng], { radius: 9, color: colors[p.kind], fillColor: colors[p.kind], fillOpacity: 0.85 })
+      .addTo(map)
+      .bindPopup(icons[p.kind] + ' ' + p.name + '（' + p.detail + '）');
+  });
+})();
 </script>
 </body></html>`;
 }

@@ -490,6 +490,9 @@ const STATUS_STEPS = [
   {key:'delivering', label:'配達中', icon:'🛵', color:'var(--st-delivering)'},
   {key:'done', label:'お届け完了', icon:'✅', color:'var(--st-done)'},
 ];
+// お客様向け画面ではSTATUS_STEPS.labelではなく、こちらの翻訳キー経由で表示する
+const STATUS_I18N_KEYS = ['statusReceived','statusCooking','statusDelivering','statusDone'];
+function statusLabel(i){ return t(STATUS_I18N_KEYS[i]); }
 
 // ---------- 配送パートナー・アカウント（モック、簡易ログイン用） ----------
 const DRIVER_ACCOUNTS = [
@@ -539,12 +542,192 @@ const I18N = {
     heroTitle1:'南国の一皿を、', heroTitle2:'今いる部屋まで。',
     heroDesc:'ホテル・ヴィラ滞在中に、島の名店グルメをそのままお部屋へ。予約もチェックインも不要、選ぶだけ。',
     selectStay:'ご滞在先を選択', findStore:'この滞在先でお店を探す',
+    serviceAreaNote:'サービス開始エリア: 恩納村・北谷町（他エリアは順次拡大予定）',
+    noHotelSelected:'滞在先未選択', selectedSuffix:'・選択中',
+    headerStoreList:'お店を選ぶ', headerCart:'カート', headerDelivery:'配送先の入力',
+    headerReviewOrder:'注文内容の確認', headerStatus:'注文状況', headerFavorites:'お気に入り',
+    headerOrderHistory:'注文履歴', headerProfile:'マイページ',
+    allGenres:'すべて', minOrderLabel:'最低注文',
+    dietVegan:'🌱 Vegan対応', dietHalal:'☪️ Halal対応', dietGlutenFree:'🌾 Gluten-Free対応',
+    menuLabel:'メニュー', prepTimeLabel:'調理・お届け目安',
+    favoriteLabel:'お気に入り', addToCartBtn:'カートに追加',
+    viewCartBtn:'カートを見る',
+    emptyCart:'カートは空です', viewStoresBtn:'お店を見る', orderFromSuffix:'からのご注文',
+    couponCodeLabel:'クーポンコード（任意）', applyBtn:'適用', couponAppliedSuffix:'を適用しました',
+    subtotalLabel:'小計', couponDiscountLabel:'クーポン割引', deliveryFeeLabel:'配送料', totalLabel:'合計',
+    enterDeliveryBtn:'配送先を入力する',
+    roomTypeLabel:'部屋タイプ', selectPlaceholder:'選択してください', roomNumberLabel:'部屋番号',
+    roomNumberPlaceholder:'例：805', deliveryMethodLabel:'お受け取り方法の選択',
+    methodFront:'ホテルフロントに預け（推奨）', methodDoor:'お部屋のドア前に置き配', methodHand:'お部屋で直接手渡し',
+    frontNotice:'ℹ️ フロントスタッフがお預かりし、ご到着まで保管いたします。お名前でお呼び出しいたしますので、フロントにお声がけください。',
+    guestNameLabel:'お名前', guestNamePlaceholder:'例：山田 太郎',
+    noteLabel:'メモ入力欄（任意）', notePlaceholder:'例：フロント預け名義：サトウ／ドア前到着時にベルを鳴らしてください',
+    lineIdLabel:'LINE通知を受け取る（任意）', lineIdPlaceholder:'LINEユーザーIDをお持ちの場合はご入力ください',
+    lineIdNotice:'ℹ️ ご入力いただくと、調理開始・お届け完了のタイミングでLINEにお知らせをお送りします（任意・未入力でもご注文いただけます）。',
+    confirmOrderBtn:'注文内容を確認する',
+    alertNoHotel:'滞在先ホテルが選択されていません。', alertNoRoomType:'部屋タイプを選択してください。', alertNoRoom:'部屋番号を入力してください。',
+    deliveryDestLabel:'お届け先', roomLabel:'部屋', nameLabel:'お名前', notEntered:'（未入力）',
+    receiveMethodLabel:'受け取り方法', memoLabel:'メモ', totalAmountLabel:'合計金額',
+    confirmPlaceOrderBtn:'この内容で注文を確定する', editDeliveryBtn:'配送先を修正する',
+    thankYouTitle:'ご注文ありがとうございます！', orderedStoreLabel:'ご注文店舗', orderedQtyLabel:'ご注文点数',
+    pointsUnit:'点', estDeliveryTimeLabel:'予想お届け時間', estDeliveryValue:'25〜40分',
+    checkStatusBtn:'配達状況を確認する', backToTopBtn:'トップへ戻る',
+    deliveringToSuffix:'へ配達中...', completedLabel:'完了', inProgressLabel:'進行中...', waitingLabel:'待機中',
+    autoUpdateNotice:'数秒ごとに自動更新されます（デモ用シミュレーション）',
+    seeYouAgain:'またのご利用をお待ちしております', reorderBtn:'同じ内容でもう一度注文する',
+    delayNoticeTitle:'【お知らせ】お届け予定時間の変更', delayAckBtn:'確認しました',
+    noActiveOrder:'進行中の注文はありません', noOrderInfo:'注文情報がありません',
+    reviewPrompt:'今回のご注文はいかがでしたか？', commentPlaceholder:'コメント（任意）', submitReviewBtn:'評価を送信する',
+    noFavorites:'まだお気に入りがありません', noHistory:'まだご注文履歴がありません',
+    dietaryProfileTitle:'🥗 食事制限プロフィール', dietaryProfileDesc:'設定すると、対応メニューが各店舗で目立つよう表示されます。',
+    veganLabel:'🌱 Vegan（ヴィーガン）', halalLabel:'☪️ Halal（ハラール）', glutenFreeLabel:'🌾 Gluten-Free（グルテンフリー）',
+    languageTitle:'🌐 Language / 言語',
+    statusReceived:'注文受付', statusCooking:'お店で調理中', statusDelivering:'配達中', statusDone:'お届け完了',
+    genreAll:'すべて',
   },
   en:{
     navHome:'Home', navFav:'Favorites', navHistory:'History', navProfile:'Profile',
     heroTitle1:'Island flavors,', heroTitle2:'delivered to your room.',
     heroDesc:'Order local favorites straight to your hotel or villa. No reservation, no check-in — just pick and go.',
     selectStay:'Select your stay', findStore:'Browse restaurants for this stay',
+    serviceAreaNote:'Service area: Onna & Chatan (more areas coming soon)',
+    noHotelSelected:'No stay selected', selectedSuffix:' · Selected',
+    headerStoreList:'Choose a restaurant', headerCart:'Cart', headerDelivery:'Delivery details',
+    headerReviewOrder:'Review your order', headerStatus:'Order status', headerFavorites:'Favorites',
+    headerOrderHistory:'Order history', headerProfile:'Profile',
+    allGenres:'All', minOrderLabel:'Min. order',
+    dietVegan:'🌱 Vegan', dietHalal:'☪️ Halal', dietGlutenFree:'🌾 Gluten-Free',
+    menuLabel:'Menu', prepTimeLabel:'Prep & delivery time',
+    favoriteLabel:'Favorite', addToCartBtn:'Add to cart',
+    viewCartBtn:'View cart',
+    emptyCart:'Your cart is empty', viewStoresBtn:'Browse restaurants', orderFromSuffix:'’s order',
+    couponCodeLabel:'Coupon code (optional)', applyBtn:'Apply', couponAppliedSuffix:' applied',
+    subtotalLabel:'Subtotal', couponDiscountLabel:'Coupon discount', deliveryFeeLabel:'Delivery fee', totalLabel:'Total',
+    enterDeliveryBtn:'Enter delivery details',
+    roomTypeLabel:'Room type', selectPlaceholder:'Please select', roomNumberLabel:'Room number',
+    roomNumberPlaceholder:'e.g. 805', deliveryMethodLabel:'Delivery method',
+    methodFront:'Leave at hotel front desk (recommended)', methodDoor:'Leave at room door', methodHand:'Hand directly to guest',
+    frontNotice:'ℹ️ Front desk staff will hold your order until you arrive. Please ask at the front desk under your name.',
+    guestNameLabel:'Name', guestNamePlaceholder:'e.g. John Smith',
+    noteLabel:'Note (optional)', notePlaceholder:'e.g. Front desk name: Smith / Please ring the bell at the door',
+    lineIdLabel:'Receive LINE notifications (optional)', lineIdPlaceholder:'Enter your LINE user ID if you have one',
+    lineIdNotice:'ℹ️ If entered, we\'ll send you a LINE message when cooking starts and when your order is delivered (optional).',
+    confirmOrderBtn:'Review order',
+    alertNoHotel:'Please select your hotel first.', alertNoRoomType:'Please select a room type.', alertNoRoom:'Please enter your room number.',
+    deliveryDestLabel:'Delivery to', roomLabel:'Room', nameLabel:'Name', notEntered:'(not entered)',
+    receiveMethodLabel:'Delivery method', memoLabel:'Note', totalAmountLabel:'Total amount',
+    confirmPlaceOrderBtn:'Place order', editDeliveryBtn:'Edit delivery details',
+    thankYouTitle:'Thank you for your order!', orderedStoreLabel:'Restaurant', orderedQtyLabel:'Items ordered',
+    pointsUnit:' items', estDeliveryTimeLabel:'Estimated delivery time', estDeliveryValue:'25–40 min',
+    checkStatusBtn:'Check delivery status', backToTopBtn:'Back to top',
+    deliveringToSuffix:' — delivering...', completedLabel:'Done', inProgressLabel:'In progress...', waitingLabel:'Waiting',
+    autoUpdateNotice:'This updates automatically every few seconds (demo simulation)',
+    seeYouAgain:'Thank you, we hope to serve you again', reorderBtn:'Order this again',
+    delayNoticeTitle:'Notice: Delivery time change', delayAckBtn:'Got it',
+    noActiveOrder:'No orders in progress', noOrderInfo:'No order information',
+    reviewPrompt:'How was your order?', commentPlaceholder:'Comment (optional)', submitReviewBtn:'Submit review',
+    noFavorites:'No favorites yet', noHistory:'No order history yet',
+    dietaryProfileTitle:'🥗 Dietary profile', dietaryProfileDesc:'Set your preferences to highlight matching dishes at each restaurant.',
+    veganLabel:'🌱 Vegan', halalLabel:'☪️ Halal', glutenFreeLabel:'🌾 Gluten-Free',
+    languageTitle:'🌐 Language / 言語',
+    statusReceived:'Order received', statusCooking:'Cooking', statusDelivering:'Out for delivery', statusDone:'Delivered',
+    genreAll:'All',
+  },
+  zh:{
+    navHome:'首页', navFav:'收藏', navHistory:'历史', navProfile:'我的',
+    heroTitle1:'南国的美味，', heroTitle2:'直送您的房间。',
+    heroDesc:'入住酒店或别墅期间，尽享岛内人气美食直送客房。无需预约、无需办理登记，轻松下单。',
+    selectStay:'选择入住地点', findStore:'查找该住宿附近的餐厅',
+    serviceAreaNote:'服务区域：恩纳村・北谷町（其他区域将陆续开放）',
+    noHotelSelected:'尚未选择住宿', selectedSuffix:'・已选择',
+    headerStoreList:'选择餐厅', headerCart:'购物车', headerDelivery:'填写配送信息',
+    headerReviewOrder:'确认订单内容', headerStatus:'订单状态', headerFavorites:'收藏',
+    headerOrderHistory:'订单历史', headerProfile:'我的',
+    allGenres:'全部', minOrderLabel:'最低起送',
+    dietVegan:'🌱 素食', dietHalal:'☪️ 清真', dietGlutenFree:'🌾 无麸质',
+    menuLabel:'菜单', prepTimeLabel:'烹饪・配送预估时间',
+    favoriteLabel:'收藏', addToCartBtn:'加入购物车',
+    viewCartBtn:'查看购物车',
+    emptyCart:'购物车是空的', viewStoresBtn:'查看餐厅', orderFromSuffix:' 的订单',
+    couponCodeLabel:'优惠码（选填）', applyBtn:'使用', couponAppliedSuffix:' 已应用',
+    subtotalLabel:'小计', couponDiscountLabel:'优惠折扣', deliveryFeeLabel:'配送费', totalLabel:'合计',
+    enterDeliveryBtn:'填写配送信息',
+    roomTypeLabel:'房型', selectPlaceholder:'请选择', roomNumberLabel:'房间号',
+    roomNumberPlaceholder:'例：805', deliveryMethodLabel:'请选择取餐方式',
+    methodFront:'寄放酒店前台（推荐）', methodDoor:'放置于房门口', methodHand:'亲自送达房间',
+    frontNotice:'ℹ️ 前台工作人员将为您保管订单直至您领取。请到前台报您的姓名领取。',
+    guestNameLabel:'姓名', guestNamePlaceholder:'例：山田 太郎',
+    noteLabel:'备注（选填）', notePlaceholder:'例：前台寄放姓名：佐藤／放置门口时请按门铃',
+    lineIdLabel:'接收LINE通知（选填）', lineIdPlaceholder:'如有LINE用户ID请填写',
+    lineIdNotice:'ℹ️ 填写后，将在开始烹饪与配送完成时通过LINE通知您（选填，不填写也可下单）。',
+    confirmOrderBtn:'确认订单内容',
+    alertNoHotel:'尚未选择入住酒店。', alertNoRoomType:'请选择房型。', alertNoRoom:'请输入房间号。',
+    deliveryDestLabel:'配送地址', roomLabel:'房间', nameLabel:'姓名', notEntered:'（未填写）',
+    receiveMethodLabel:'取餐方式', memoLabel:'备注', totalAmountLabel:'总金额',
+    confirmPlaceOrderBtn:'确认下单', editDeliveryBtn:'修改配送信息',
+    thankYouTitle:'感谢您的订购！', orderedStoreLabel:'订购餐厅', orderedQtyLabel:'订购件数',
+    pointsUnit:'件', estDeliveryTimeLabel:'预计送达时间', estDeliveryValue:'25〜40分钟',
+    checkStatusBtn:'查看配送状态', backToTopBtn:'返回首页',
+    deliveringToSuffix:' 配送中...', completedLabel:'已完成', inProgressLabel:'进行中...', waitingLabel:'等待中',
+    autoUpdateNotice:'状态每隔几秒自动更新（演示用模拟）',
+    seeYouAgain:'期待您的再次光临', reorderBtn:'再次订购相同内容',
+    delayNoticeTitle:'【通知】送达时间变更', delayAckBtn:'我知道了',
+    noActiveOrder:'目前没有进行中的订单', noOrderInfo:'没有订单信息',
+    reviewPrompt:'这次的订购您满意吗？', commentPlaceholder:'留言（选填）', submitReviewBtn:'提交评价',
+    noFavorites:'暂无收藏', noHistory:'暂无订单历史',
+    dietaryProfileTitle:'🥗 饮食限制设置', dietaryProfileDesc:'设置后，各店铺将突出显示符合条件的菜品。',
+    veganLabel:'🌱 素食', halalLabel:'☪️ 清真', glutenFreeLabel:'🌾 无麸质',
+    languageTitle:'🌐 Language / 语言',
+    statusReceived:'已接单', statusCooking:'烹饪中', statusDelivering:'配送中', statusDone:'已送达',
+    genreAll:'全部',
+  },
+  ko:{
+    navHome:'홈', navFav:'즐겨찾기', navHistory:'내역', navProfile:'마이페이지',
+    heroTitle1:'남국의 한 끼를,', heroTitle2:'지금 계신 방까지.',
+    heroDesc:'호텔・빌라에 머무는 동안 섬의 맛집 요리를 방으로 그대로. 예약도 체크인도 필요 없이, 고르기만 하면 됩니다.',
+    selectStay:'숙소 선택', findStore:'이 숙소 기준으로 맛집 찾기',
+    serviceAreaNote:'서비스 시작 지역: 온나손・차탄초(향후 지역 확대 예정)',
+    noHotelSelected:'숙소 미선택', selectedSuffix:'・선택됨',
+    headerStoreList:'가게 선택', headerCart:'장바구니', headerDelivery:'배송지 입력',
+    headerReviewOrder:'주문 내용 확인', headerStatus:'주문 현황', headerFavorites:'즐겨찾기',
+    headerOrderHistory:'주문 내역', headerProfile:'마이페이지',
+    allGenres:'전체', minOrderLabel:'최소 주문금액',
+    dietVegan:'🌱 비건', dietHalal:'☪️ 할랄', dietGlutenFree:'🌾 글루텐프리',
+    menuLabel:'메뉴', prepTimeLabel:'조리・배달 예상 시간',
+    favoriteLabel:'즐겨찾기', addToCartBtn:'장바구니에 담기',
+    viewCartBtn:'장바구니 보기',
+    emptyCart:'장바구니가 비어 있습니다', viewStoresBtn:'가게 보기', orderFromSuffix:' 주문',
+    couponCodeLabel:'쿠폰 코드(선택)', applyBtn:'적용', couponAppliedSuffix:' 적용됨',
+    subtotalLabel:'소계', couponDiscountLabel:'쿠폰 할인', deliveryFeeLabel:'배달료', totalLabel:'합계',
+    enterDeliveryBtn:'배송지 입력하기',
+    roomTypeLabel:'객실 타입', selectPlaceholder:'선택해 주세요', roomNumberLabel:'객실 번호',
+    roomNumberPlaceholder:'예: 805', deliveryMethodLabel:'수령 방법 선택',
+    methodFront:'호텔 프런트에 보관(추천)', methodDoor:'객실 문 앞에 놓아두기', methodHand:'객실에서 직접 전달',
+    frontNotice:'ℹ️ 프런트 직원이 도착 시까지 보관해 드립니다. 성함을 말씀하시고 프런트에 문의해 주세요.',
+    guestNameLabel:'성함', guestNamePlaceholder:'예: 김민준',
+    noteLabel:'메모(선택)', notePlaceholder:'예: 프런트 보관 명의: 김 / 문 앞 도착 시 벨을 눌러주세요',
+    lineIdLabel:'LINE 알림 받기(선택)', lineIdPlaceholder:'LINE 사용자 ID가 있으시면 입력해 주세요',
+    lineIdNotice:'ℹ️ 입력하시면 조리 시작 및 배달 완료 시점에 LINE으로 알려드립니다(선택 사항, 미입력해도 주문 가능).',
+    confirmOrderBtn:'주문 내용 확인하기',
+    alertNoHotel:'숙소가 선택되지 않았습니다.', alertNoRoomType:'객실 타입을 선택해 주세요.', alertNoRoom:'객실 번호를 입력해 주세요.',
+    deliveryDestLabel:'배송지', roomLabel:'객실', nameLabel:'성함', notEntered:'(미입력)',
+    receiveMethodLabel:'수령 방법', memoLabel:'메모', totalAmountLabel:'총 금액',
+    confirmPlaceOrderBtn:'이 내용으로 주문 확정', editDeliveryBtn:'배송지 수정',
+    thankYouTitle:'주문해 주셔서 감사합니다!', orderedStoreLabel:'주문 매장', orderedQtyLabel:'주문 수량',
+    pointsUnit:'개', estDeliveryTimeLabel:'예상 배달 시간', estDeliveryValue:'25~40분',
+    checkStatusBtn:'배달 현황 확인하기', backToTopBtn:'홈으로 돌아가기',
+    deliveringToSuffix:' 배달 중...', completedLabel:'완료', inProgressLabel:'진행 중...', waitingLabel:'대기 중',
+    autoUpdateNotice:'몇 초마다 자동으로 갱신됩니다 (데모용 시뮬레이션)',
+    seeYouAgain:'다시 이용해 주시기를 기다리겠습니다', reorderBtn:'같은 내용으로 다시 주문',
+    delayNoticeTitle:'[안내] 배달 예정 시간 변경', delayAckBtn:'확인했습니다',
+    noActiveOrder:'진행 중인 주문이 없습니다', noOrderInfo:'주문 정보가 없습니다',
+    reviewPrompt:'이번 주문은 어떠셨나요?', commentPlaceholder:'코멘트(선택)', submitReviewBtn:'평가 제출하기',
+    noFavorites:'아직 즐겨찾기가 없습니다', noHistory:'아직 주문 내역이 없습니다',
+    dietaryProfileTitle:'🥗 식단 프로필', dietaryProfileDesc:'설정하면 각 매장에서 해당 메뉴가 눈에 띄게 표시됩니다.',
+    veganLabel:'🌱 비건', halalLabel:'☪️ 할랄', glutenFreeLabel:'🌾 글루텐프리',
+    languageTitle:'🌐 Language / 언어',
+    statusReceived:'주문 접수', statusCooking:'조리 중', statusDelivering:'배달 중', statusDone:'배달 완료',
+    genreAll:'전체',
   },
 };
 function t(key){ return (I18N[state.lang] && I18N[state.lang][key]) || I18N.ja[key] || key; }
@@ -829,7 +1012,7 @@ function renderTop(){
     </div>
     <div class="section">
       <div class="section-title">📍 ${t('selectStay')}</div>
-      <div style="font-size:11.5px;color:var(--text-sub);margin:-8px 0 14px;">サービス開始エリア: 恩納村・北谷町（他エリアは順次拡大予定）</div>
+      <div style="font-size:11.5px;color:var(--text-sub);margin:-8px 0 14px;">${t('serviceAreaNote')}</div>
       ${state.hotel ? `
         <div class="hotel-chip">
           <div class="ic">${state.hotel.icon}</div>
@@ -856,19 +1039,19 @@ function renderStoreList(){
   const genres = ['すべて', ...new Set(STORES.map(s=>s.genre))];
   const list = state.activeGenreFilter==='すべて' ? STORES : STORES.filter(s=>s.genre===state.activeGenreFilter);
   return `
-    ${Header('お店を選ぶ', {backTo:'top'})}
+    ${Header(t('headerStoreList'), {backTo:'top'})}
     <div class="section" style="padding-bottom:4px;">
       <div class="hotel-chip" style="margin-bottom:14px;">
         <div class="ic">${state.hotel?.icon||'📍'}</div>
-        <div><div class="hn">${state.hotel?.name||'滞在先未選択'}</div><div class="ha">${state.hotel?.area||''}${state.room?`・${state.room}号室`:''}</div></div>
+        <div><div class="hn">${state.hotel?.name||t('noHotelSelected')}</div><div class="ha">${state.hotel?.area||''}${state.room?`・${state.room}号室`:''}</div></div>
       </div>
       <div class="chip-row">
-        ${genres.map(g=>`<div class="chip ${state.activeGenreFilter===g?'active':''}" onclick="filterGenre('${g}')">${g}</div>`).join('')}
+        ${genres.map(g=>`<div class="chip ${state.activeGenreFilter===g?'active':''}" onclick="filterGenre('${g}')">${g==='すべて'?t('genreAll'):g}</div>`).join('')}
       </div>
       ${list.map(s=>{
         const dp = state.dietaryProfile;
         const matched = (dp.vegan&&s.tags.includes('vegan')) || (dp.halal&&s.tags.includes('halal')) || (dp.glutenFree&&s.tags.includes('glutenFree'));
-        const matchLabels = {vegan:'🌱 Vegan対応',halal:'☪️ Halal対応',glutenFree:'🌾 Gluten-Free対応'};
+        const matchLabels = {vegan:t('dietVegan'),halal:t('dietHalal'),glutenFree:t('dietGlutenFree')};
         return `
         <div class="store-card ${matched?'diet-match':''}" onclick="openStore('${s.id}')">
           <div class="store-thumb photo-scene ${sceneClassOf(s.id)}">${sceneDeco(s.id)}<span class="pcontent">${s.icon}</span></div>
@@ -877,7 +1060,7 @@ function renderStoreList(){
             <span class="genre">${s.genre}</span>
             ${matched?`<div class="match-badges">${s.tags.filter(tg=>dp[tg]).map(tg=>`<span class="match-badge">${matchLabels[tg]}</span>`).join('')}</div>`:''}
             <div class="desc">${s.desc}</div>
-            <div class="meta"><span>⏱ ${s.time}</span><span>最低注文 ${formatYen(s.minOrder)}</span></div>
+            <div class="meta"><span>⏱ ${s.time}</span><span>${t('minOrderLabel')} ${formatYen(s.minOrder)}</span></div>
           </div>
         </div>
       `;}).join('')}
@@ -898,11 +1081,11 @@ function renderStoreDetail(){
         <div style="font-size:40px;">${s.icon}</div>
         <div style="font-weight:800;font-size:19px;margin-top:8px;">${s.name}</div>
         <div style="font-size:12.5px;opacity:.9;margin-top:4px;">${s.desc}</div>
-        <div style="margin-top:10px;font-size:12px;opacity:.9;">⏱ 調理・お届け目安 ${s.time}　｜　最低注文 ${formatYen(s.minOrder)}</div>
+        <div style="margin-top:10px;font-size:12px;opacity:.9;">⏱ ${t('prepTimeLabel')} ${s.time}　｜　${t('minOrderLabel')} ${formatYen(s.minOrder)}</div>
       </div>
     </div>
     <div class="section">
-      <div class="section-title">メニュー</div>
+      <div class="section-title">${t('menuLabel')}</div>
       ${s.menu.map(p=>`
         <div class="prod-row" onclick="openProduct('${s.id}','${p.id}')">
           <div style="display:flex;gap:10px;align-items:center;">
@@ -944,14 +1127,14 @@ function renderProductDetail(){
     <div class="section">
       <div style="text-align:center;margin-bottom:6px;">
         <span class="star ${isFavorite(s.id,p.id)?'on':''}" style="font-size:24px;" onclick="toggleFavorite('${s.id}','${p.id}')">★</span>
-        <span style="font-size:11.5px;color:var(--text-sub);vertical-align:middle;">お気に入り</span>
+        <span style="font-size:11.5px;color:var(--text-sub);vertical-align:middle;">${t('favoriteLabel')}</span>
       </div>
       <div class="qty-box">
         <div class="qty-btn" onclick="changeQty(-1)">－</div>
         <div class="qty-num">${qty}</div>
         <div class="qty-btn" onclick="changeQty(1)">＋</div>
       </div>
-      <button class="cta" onclick="addFromDetail('${s.id}','${p.id}')">カートに追加（${formatYen(p.price*qty)}）</button>
+      <button class="cta" onclick="addFromDetail('${s.id}','${p.id}')">${t('addToCartBtn')}（${formatYen(p.price*qty)}）</button>
     </div>
   `;
 }
@@ -966,20 +1149,20 @@ function renderBottomCartBar(){
   return `
     <div class="bottombar">
       <div class="price">${formatYen(cartTotal())}</div>
-      <button class="cta" style="margin:0;" onclick="goTo('cart')">カートを見る（${cartCount()}点）</button>
+      <button class="cta" style="margin:0;" onclick="goTo('cart')">${t('viewCartBtn')}（${cartCount()}${t('pointsUnit')}）</button>
     </div>
   `;
 }
 
 function renderCart(){
   if(state.cart.length===0){
-    return `${Header('カート',{backTo:'storeList',hideCart:true})}${renderEmpty('🛒','カートは空です','storeList','お店を見る')}`;
+    return `${Header(t('headerCart'),{backTo:'storeList',hideCart:true})}${renderEmpty('🛒',t('emptyCart'),'storeList',t('viewStoresBtn'))}`;
   }
   const store = getStore(cartStoreId());
   return `
-    ${Header('カート', {backTo:'storeList', hideCart:true})}
+    ${Header(t('headerCart'), {backTo:'storeList', hideCart:true})}
     <div class="section">
-      <div style="font-size:12.5px;color:var(--text-sub);margin-bottom:10px;">${store?store.name:''} からのご注文</div>
+      <div style="font-size:12.5px;color:var(--text-sub);margin-bottom:10px;">${store?store.name:''}${t('orderFromSuffix')}</div>
       ${state.cart.map(c=>{
         const p = getProduct(c.storeId,c.productId);
         if(!p) return '';
@@ -997,144 +1180,146 @@ function renderCart(){
         </div>`;
       }).join('')}
       <div class="field" style="margin-top:14px;">
-        <label>クーポンコード（任意）</label>
+        <label>${t('couponCodeLabel')}</label>
         <div style="display:flex;gap:8px;">
           <input type="text" placeholder="例：WELCOME500" value="${state.couponCode}" oninput="state.couponCode=this.value" style="flex:1;">
-          <button class="cta small" style="width:auto;margin:0;padding:0 16px;" onclick="applyCoupon()">適用</button>
+          <button class="cta small" style="width:auto;margin:0;padding:0 16px;" onclick="applyCoupon()">${t('applyBtn')}</button>
         </div>
-        ${state.appliedCoupon?`<div class="notice-box">✅ ${state.appliedCoupon.label} を適用しました</div>`:''}
+        ${state.appliedCoupon?`<div class="notice-box">✅ ${state.appliedCoupon.label}${t('couponAppliedSuffix')}</div>`:''}
       </div>
       <div style="margin-top:10px;">
-        <div class="summary-row"><span>小計</span><span>${formatYen(cartTotal())}</span></div>
-        ${state.appliedCoupon?`<div class="summary-row"><span>クーポン割引</span><span>-${formatYen(couponDiscountAmount(cartTotal()))}</span></div>`:''}
-        <div class="summary-row"><span>配送料</span><span>${formatYen(300)}</span></div>
-        <div class="summary-row total"><span>合計</span><span>${formatYen(Math.max(0,cartTotal()-couponDiscountAmount(cartTotal()))+300)}</span></div>
+        <div class="summary-row"><span>${t('subtotalLabel')}</span><span>${formatYen(cartTotal())}</span></div>
+        ${state.appliedCoupon?`<div class="summary-row"><span>${t('couponDiscountLabel')}</span><span>-${formatYen(couponDiscountAmount(cartTotal()))}</span></div>`:''}
+        <div class="summary-row"><span>${t('deliveryFeeLabel')}</span><span>${formatYen(300)}</span></div>
+        <div class="summary-row total"><span>${t('totalLabel')}</span><span>${formatYen(Math.max(0,cartTotal()-couponDiscountAmount(cartTotal()))+300)}</span></div>
       </div>
-      <button class="cta" onclick="goTo('delivery')">配送先を入力する</button>
+      <button class="cta" onclick="goTo('delivery')">${t('enterDeliveryBtn')}</button>
     </div>
   `;
 }
 
 function renderDelivery(){
   return `
-    ${Header('配送先の入力', {backTo:'cart', hideCart:true})}
+    ${Header(t('headerDelivery'), {backTo:'cart', hideCart:true})}
     <div class="section">
       <div class="hotel-chip">
         <div class="ic">${state.hotel?.icon||'📍'}</div>
-        <div><div class="hn">${state.hotel?.name||'滞在先未選択'}</div><div class="ha">${state.hotel?.area||''}</div></div>
+        <div><div class="hn">${state.hotel?.name||t('noHotelSelected')}</div><div class="ha">${state.hotel?.area||''}</div></div>
       </div>
       <div class="field">
-        <label>部屋タイプ</label>
+        <label>${t('roomTypeLabel')}</label>
         <select onchange="state.roomType=this.value">
-          <option value="">選択してください</option>
+          <option value="">${t('selectPlaceholder')}</option>
           ${(state.hotel?.rooms||[]).map(r=>`<option value="${r}" ${state.roomType===r?'selected':''}>${r}</option>`).join('')}
         </select>
       </div>
       <div class="field">
-        <label>部屋番号</label>
-        <input type="text" placeholder="例：805" value="${state.room}" oninput="state.room=this.value">
+        <label>${t('roomNumberLabel')}</label>
+        <input type="text" placeholder="${t('roomNumberPlaceholder')}" value="${state.room}" oninput="state.room=this.value">
       </div>
       <div class="field">
-        <label>お受け取り方法の選択</label>
+        <label>${t('deliveryMethodLabel')}</label>
         <div class="radio-group">
-          ${[['front','ホテルフロントに預け（推奨）'],['door','お部屋のドア前に置き配'],['hand','お部屋で直接手渡し']].map(([v,l])=>`
+          ${[['front',t('methodFront')],['door',t('methodDoor')],['hand',t('methodHand')]].map(([v,l])=>`
             <label class="radio-row">
               <input type="radio" name="dmethod" value="${v}" ${state.deliveryMethod===v?'checked':''} onchange="state.deliveryMethod='${v}';render();">
               <span>${l}</span>
             </label>
           `).join('')}
         </div>
-        ${state.deliveryMethod==='front' ? `<div class="notice-box">ℹ️ フロントスタッフがお預かりし、ご到着まで保管いたします。お名前でお呼び出しいたしますので、フロントにお声がけください。</div>` : ''}
+        ${state.deliveryMethod==='front' ? `<div class="notice-box">${t('frontNotice')}</div>` : ''}
       </div>
       <div class="field">
-        <label>お名前</label>
-        <input type="text" placeholder="例：山田 太郎" value="${state.guestName}" oninput="state.guestName=this.value">
+        <label>${t('guestNameLabel')}</label>
+        <input type="text" placeholder="${t('guestNamePlaceholder')}" value="${state.guestName}" oninput="state.guestName=this.value">
       </div>
       <div class="field">
-        <label>メモ入力欄（任意）</label>
-        <textarea rows="3" placeholder="例：フロント預け名義：サトウ／ドア前到着時にベルを鳴らしてください" oninput="state.note=this.value">${state.note}</textarea>
+        <label>${t('noteLabel')}</label>
+        <textarea rows="3" placeholder="${t('notePlaceholder')}" oninput="state.note=this.value">${state.note}</textarea>
       </div>
       <div class="field">
-        <label>LINE通知を受け取る（任意）</label>
-        <input type="text" placeholder="LINEユーザーIDをお持ちの場合はご入力ください" value="${state.customerLineId}" oninput="state.customerLineId=this.value">
-        <div class="notice-box">ℹ️ ご入力いただくと、調理開始・お届け完了のタイミングでLINEにお知らせをお送りします（任意・未入力でもご注文いただけます）。</div>
+        <label>${t('lineIdLabel')}</label>
+        <input type="text" placeholder="${t('lineIdPlaceholder')}" value="${state.customerLineId}" oninput="state.customerLineId=this.value">
+        <div class="notice-box">${t('lineIdNotice')}</div>
       </div>
-      <button class="cta" onclick="tryConfirmOrder()">注文内容を確認する</button>
+      <button class="cta" onclick="tryConfirmOrder()">${t('confirmOrderBtn')}</button>
     </div>
   `;
 }
 function tryConfirmOrder(){
-  if(!state.hotel){ alert('滞在先ホテルが選択されていません。'); return; }
-  if(!state.roomType){ alert('部屋タイプを選択してください。'); return; }
-  if(!state.room){ alert('部屋番号を入力してください。'); return; }
+  if(!state.hotel){ alert(t('alertNoHotel')); return; }
+  if(!state.roomType){ alert(t('alertNoRoomType')); return; }
+  if(!state.room){ alert(t('alertNoRoom')); return; }
   goTo('reviewOrder');
 }
 
+const DELIVERY_METHOD_I18N_KEY = {front:'methodFront', door:'methodDoor', hand:'methodHand'};
+function deliveryMethodLabel(method){ return t(DELIVERY_METHOD_I18N_KEY[method]) || DELIVERY_METHOD_LABEL[method]; }
 function renderReviewOrder(){
   const store = getStore(cartStoreId());
   return `
-    ${Header('注文内容の確認', {backTo:'delivery', hideCart:true})}
+    ${Header(t('headerReviewOrder'), {backTo:'delivery', hideCart:true})}
     <div class="section">
       <div class="receipt" style="margin:0 0 14px;">
-        <div class="line"><span>お届け先</span><b>${state.hotel.name}</b></div>
-        <div class="line"><span>部屋</span><b>${state.roomType} / ${state.room}号室</b></div>
-        <div class="line"><span>お名前</span><b>${state.guestName||'（未入力）'}</b></div>
-        <div class="line"><span>受け取り方法</span><b>${DELIVERY_METHOD_LABEL[state.deliveryMethod]}</b></div>
-        ${state.note?`<div class="line"><span>メモ</span><b>${state.note}</b></div>`:''}
+        <div class="line"><span>${t('deliveryDestLabel')}</span><b>${state.hotel.name}</b></div>
+        <div class="line"><span>${t('roomLabel')}</span><b>${state.roomType} / ${state.room}号室</b></div>
+        <div class="line"><span>${t('nameLabel')}</span><b>${state.guestName||t('notEntered')}</b></div>
+        <div class="line"><span>${t('receiveMethodLabel')}</span><b>${deliveryMethodLabel(state.deliveryMethod)}</b></div>
+        ${state.note?`<div class="line"><span>${t('memoLabel')}</span><b>${state.note}</b></div>`:''}
       </div>
       <div class="section-title">${store?store.name:''}</div>
       ${state.cart.map(c=>{
         const p=getProduct(c.storeId,c.productId);
         return `<div class="summary-row"><span>${p.name} × ${c.qty}</span><span>${formatYen(p.price*c.qty)}</span></div>`;
       }).join('')}
-      ${state.appliedCoupon?`<div class="summary-row"><span>クーポン割引（${state.appliedCoupon.label}）</span><span>-${formatYen(couponDiscountAmount(cartTotal()))}</span></div>`:''}
-      <div class="summary-row"><span>配送料</span><span>${formatYen(300)}</span></div>
-      <div class="summary-row total"><span>合計金額</span><span>${formatYen(Math.max(0,cartTotal()-couponDiscountAmount(cartTotal()))+300)}</span></div>
-      <button class="cta" onclick="placeOrder()">この内容で注文を確定する</button>
-      <button class="cta secondary" onclick="goTo('delivery')">配送先を修正する</button>
+      ${state.appliedCoupon?`<div class="summary-row"><span>${t('couponDiscountLabel')}（${state.appliedCoupon.label}）</span><span>-${formatYen(couponDiscountAmount(cartTotal()))}</span></div>`:''}
+      <div class="summary-row"><span>${t('deliveryFeeLabel')}</span><span>${formatYen(300)}</span></div>
+      <div class="summary-row total"><span>${t('totalAmountLabel')}</span><span>${formatYen(Math.max(0,cartTotal()-couponDiscountAmount(cartTotal()))+300)}</span></div>
+      <button class="cta" onclick="placeOrder()">${t('confirmPlaceOrderBtn')}</button>
+      <button class="cta secondary" onclick="goTo('delivery')">${t('editDeliveryBtn')}</button>
     </div>
   `;
 }
 
 function renderConfirm(){
   const o = myActiveOrder();
-  if(!o) return renderEmpty('📭','注文情報がありません','top','トップへ戻る');
+  if(!o) return renderEmpty('📭',t('noOrderInfo'),'top',t('backToTopBtn'));
   startStatusAutoAdvance();
   return `
     <div class="order-hero">
       <div class="ok-circle">✅</div>
-      <div style="font-weight:800;font-size:18px;">ご注文ありがとうございます！</div>
+      <div style="font-weight:800;font-size:18px;">${t('thankYouTitle')}</div>
       <div class="order-no">${o.no}</div>
     </div>
     <div class="receipt">
-      <div class="line"><span>お届け先</span><b>${o.hotel.name} ${o.roomType} / ${o.room}号室</b></div>
-      <div class="line"><span>ご注文店舗</span><b>${o.storeName}</b></div>
-      <div class="line"><span>ご注文点数</span><b>${o.items.reduce((s,i)=>s+i.qty,0)}点</b></div>
-      ${o.discount>0?`<div class="line"><span>クーポン割引</span><b>-${formatYen(o.discount)}</b></div>`:''}
-      <div class="line"><span>合計金額</span><b>${formatYen(o.total+300)}</b></div>
-      <div class="line"><span>予想お届け時間</span><b>25〜40分</b></div>
+      <div class="line"><span>${t('deliveryDestLabel')}</span><b>${o.hotel.name} ${o.roomType} / ${o.room}号室</b></div>
+      <div class="line"><span>${t('orderedStoreLabel')}</span><b>${o.storeName}</b></div>
+      <div class="line"><span>${t('orderedQtyLabel')}</span><b>${o.items.reduce((s,i)=>s+i.qty,0)}${t('pointsUnit')}</b></div>
+      ${o.discount>0?`<div class="line"><span>${t('couponDiscountLabel')}</span><b>-${formatYen(o.discount)}</b></div>`:''}
+      <div class="line"><span>${t('totalAmountLabel')}</span><b>${formatYen(o.total+300)}</b></div>
+      <div class="line"><span>${t('estDeliveryTimeLabel')}</span><b>${t('estDeliveryValue')}</b></div>
     </div>
     <div class="section">
-      <button class="cta" onclick="goTo('status')">配達状況を確認する</button>
-      <button class="cta secondary" onclick="goTo('top')">トップへ戻る</button>
+      <button class="cta" onclick="goTo('status')">${t('checkStatusBtn')}</button>
+      <button class="cta secondary" onclick="goTo('top')">${t('backToTopBtn')}</button>
     </div>
   `;
 }
 
 function renderStatus(){
   const o = myActiveOrder();
-  if(!o) return renderEmpty('📭','進行中の注文はありません','top','トップへ戻る');
+  if(!o) return renderEmpty('📭',t('noActiveOrder'),'top',t('backToTopBtn'));
   const cur = STATUS_STEPS[o.statusIndex];
   const isDone = o.statusIndex>=STATUS_STEPS.length-1;
   return `
-    ${Header('注文状況', {backTo:'top', hideCart:true})}
+    ${Header(t('headerStatus'), {backTo:'top', hideCart:true})}
     <div class="status-hero">
       <div style="font-size:12px;color:var(--text-sub);margin-bottom:8px;">${o.no}</div>
-      <div class="status-badge" style="background:${cur.color}">${cur.icon} ${cur.label}</div>
+      <div class="status-badge" style="background:${cur.color}">${cur.icon} ${statusLabel(o.statusIndex)}</div>
     </div>
     ${o.statusIndex>=2 && o.statusIndex<3 ? `
       <div class="map-mock">
-        🗺️ ${o.hotel.name} へ配達中...
+        🗺️ ${o.hotel.name}${t('deliveringToSuffix')}
         <div class="bike">🛵</div>
       </div>
     `:''}
@@ -1146,29 +1331,29 @@ function renderStatus(){
             <div class="tl-line"></div>
           </div>
           <div class="tl-text">
-            <div class="tt">${st.label}</div>
-            <div class="ts">${i<o.statusIndex?'完了':i===o.statusIndex?'進行中...':'待機中'}</div>
+            <div class="tt">${statusLabel(i)}</div>
+            <div class="ts">${i<o.statusIndex?t('completedLabel'):i===o.statusIndex?t('inProgressLabel'):t('waitingLabel')}</div>
           </div>
         </div>
       `).join('')}
     </div>
     <div class="section">
       <div class="receipt" style="margin:0 0 14px;">
-        <div class="line"><span>お届け先</span><b>${o.hotel.name} ${o.room}号室</b></div>
-        <div class="line"><span>ご注文店舗</span><b>${o.storeName}</b></div>
-        <div class="line"><span>合計金額</span><b>${formatYen(o.total+300)}</b></div>
+        <div class="line"><span>${t('deliveryDestLabel')}</span><b>${o.hotel.name} ${o.room}号室</b></div>
+        <div class="line"><span>${t('orderedStoreLabel')}</span><b>${o.storeName}</b></div>
+        <div class="line"><span>${t('totalAmountLabel')}</span><b>${formatYen(o.total+300)}</b></div>
       </div>
-      ${!isDone ? `<div style="text-align:center;font-size:11.5px;color:var(--text-sub);">数秒ごとに自動更新されます（デモ用シミュレーション）</div>` : ''}
+      ${!isDone ? `<div style="text-align:center;font-size:11.5px;color:var(--text-sub);">${t('autoUpdateNotice')}</div>` : ''}
       ${isDone && !o.reviewed ? renderReviewForm(o.id) : ''}
-      ${isDone && o.reviewed ? `<button class="cta" onclick="goTo('top')">またのご利用をお待ちしております</button>` : ''}
-      ${isDone ? `<button class="cta secondary" onclick="reorder(${o.id})">同じ内容でもう一度注文する</button>` : ''}
+      ${isDone && o.reviewed ? `<button class="cta" onclick="goTo('top')">${t('seeYouAgain')}</button>` : ''}
+      ${isDone ? `<button class="cta secondary" onclick="reorder(${o.id})">${t('reorderBtn')}</button>` : ''}
     </div>
     ${o.delayStatus && o.delayStatus.active && !o.delayStatus.ack ? `
       <div class="modal-overlay">
         <div class="modal-box">
-          <div class="modal-title">【お知らせ】お届け予定時間の変更</div>
+          <div class="modal-title">${t('delayNoticeTitle')}</div>
           <div class="modal-body">${o.delayStatus.message}</div>
-          <button class="cta" onclick="ackDelay(${o.id})">確認しました</button>
+          <button class="cta" onclick="ackDelay(${o.id})">${t('delayAckBtn')}</button>
         </div>
       </div>
     ` : ''}
@@ -1180,12 +1365,12 @@ function renderReviewForm(orderId){
   const draft = state._reviewDraft || {rating:5, comment:''};
   return `
     <div class="review-box">
-      <div style="font-weight:800;font-size:13.5px;margin-bottom:8px;">今回のご注文はいかがでしたか？</div>
+      <div style="font-weight:800;font-size:13.5px;margin-bottom:8px;">${t('reviewPrompt')}</div>
       <div class="star-row">
         ${[1,2,3,4,5].map(n=>`<span class="star ${n<=draft.rating?'on':''}" onclick="setReviewRating(${n})">★</span>`).join('')}
       </div>
-      <textarea rows="2" placeholder="コメント（任意）" oninput="state._reviewDraft=state._reviewDraft||{rating:5,comment:''};state._reviewDraft.comment=this.value;">${draft.comment}</textarea>
-      <button class="cta" onclick="submitReview(${orderId})">評価を送信する</button>
+      <textarea rows="2" placeholder="${t('commentPlaceholder')}" oninput="state._reviewDraft=state._reviewDraft||{rating:5,comment:''};state._reviewDraft.comment=this.value;">${draft.comment}</textarea>
+      <button class="cta" onclick="submitReview(${orderId})">${t('submitReviewBtn')}</button>
     </div>
   `;
 }
@@ -1328,9 +1513,9 @@ function renderDriverHome(){
 function renderFavorites(){
   const favs = state.favorites.map(f=>({...f, store:getStore(f.storeId), product:getProduct(f.storeId,f.productId)})).filter(f=>f.store&&f.product);
   return `
-    ${Header('お気に入り', {back:false})}
+    ${Header(t('headerFavorites'), {back:false})}
     <div class="section">
-      ${favs.length===0 ? renderEmpty('🤍','まだお気に入りがありません','storeList','お店を見る') : favs.map(f=>`
+      ${favs.length===0 ? renderEmpty('🤍',t('noFavorites'),'storeList',t('viewStoresBtn')) : favs.map(f=>`
         <div class="prod-row" onclick="openProduct('${f.storeId}','${f.productId}')">
           <div style="display:flex;gap:10px;align-items:center;">
             <div class="prod-icon" style="background:${f.store.color}">🍴</div>
@@ -1351,16 +1536,16 @@ function renderFavorites(){
 function renderOrderHistory(){
   const list = myOrders();
   return `
-    ${Header('注文履歴', {back:false})}
+    ${Header(t('headerOrderHistory'), {back:false})}
     <div class="section">
-      ${list.length===0 ? renderEmpty('🧾','まだご注文履歴がありません','storeList','お店を見る') : list.map(o=>`
+      ${list.length===0 ? renderEmpty('🧾',t('noHistory'),'storeList',t('viewStoresBtn')) : list.map(o=>`
         <div class="store-card" style="cursor:default;">
           <div class="store-thumb" style="background:${getStore(o.storeId)?getStore(o.storeId).color:'#888'};font-size:22px;">🧾</div>
           <div class="store-info">
             <div class="name">${o.storeName}　<span style="font-weight:400;font-size:11px;color:var(--text-sub);">${o.no}</span></div>
             <div class="desc">${o.items.map(i=>`${i.product?i.product.name:'?'}×${i.qty}`).join('、')}</div>
-            <div class="meta"><span>${formatYen(o.total+300)}</span><span>${STATUS_STEPS[o.statusIndex].label}</span></div>
-            <button class="cta small" style="margin-top:8px;" onclick="reorder(${o.id})">もう一度注文する</button>
+            <div class="meta"><span>${formatYen(o.total+300)}</span><span>${statusLabel(o.statusIndex)}</span></div>
+            <button class="cta small" style="margin-top:8px;" onclick="reorder(${o.id})">${t('reorderBtn')}</button>
           </div>
         </div>
       `).join('')}
@@ -1372,19 +1557,21 @@ function renderOrderHistory(){
 function renderProfile(){
   const dp = state.dietaryProfile;
   return `
-    ${Header('マイページ', {back:false})}
+    ${Header(t('headerProfile'), {back:false})}
     <div class="section">
-      <div class="section-title">🥗 食事制限プロフィール</div>
-      <div style="font-size:11.5px;color:var(--text-sub);margin:-8px 0 12px;">設定すると、対応メニューが各店舗で目立つよう表示されます。</div>
+      <div class="section-title">${t('dietaryProfileTitle')}</div>
+      <div style="font-size:11.5px;color:var(--text-sub);margin:-8px 0 12px;">${t('dietaryProfileDesc')}</div>
       <div class="radio-group" style="margin-bottom:20px;">
-        <label class="radio-row"><input type="checkbox" ${dp.vegan?'checked':''} onchange="state.dietaryProfile.vegan=this.checked;render();"><span>🌱 Vegan（ヴィーガン）</span></label>
-        <label class="radio-row"><input type="checkbox" ${dp.halal?'checked':''} onchange="state.dietaryProfile.halal=this.checked;render();"><span>☪️ Halal（ハラール）</span></label>
-        <label class="radio-row"><input type="checkbox" ${dp.glutenFree?'checked':''} onchange="state.dietaryProfile.glutenFree=this.checked;render();"><span>🌾 Gluten-Free（グルテンフリー）</span></label>
+        <label class="radio-row"><input type="checkbox" ${dp.vegan?'checked':''} onchange="state.dietaryProfile.vegan=this.checked;render();"><span>${t('veganLabel')}</span></label>
+        <label class="radio-row"><input type="checkbox" ${dp.halal?'checked':''} onchange="state.dietaryProfile.halal=this.checked;render();"><span>${t('halalLabel')}</span></label>
+        <label class="radio-row"><input type="checkbox" ${dp.glutenFree?'checked':''} onchange="state.dietaryProfile.glutenFree=this.checked;render();"><span>${t('glutenFreeLabel')}</span></label>
       </div>
-      <div class="section-title">🌐 Language / 言語</div>
+      <div class="section-title">${t('languageTitle')}</div>
       <div class="chip-row">
         <div class="chip ${state.lang==='ja'?'active':''}" onclick="setLang('ja')">日本語</div>
         <div class="chip ${state.lang==='en'?'active':''}" onclick="setLang('en')">English</div>
+        <div class="chip ${state.lang==='zh'?'active':''}" onclick="setLang('zh')">中文</div>
+        <div class="chip ${state.lang==='ko'?'active':''}" onclick="setLang('ko')">한국어</div>
       </div>
     </div>
   `;

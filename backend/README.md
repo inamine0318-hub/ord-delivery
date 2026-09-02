@@ -51,6 +51,8 @@ curl -X POST http://localhost:3001/api/auth/login \
 - `POST /webhooks/line` — LINEのFlex Messageボタン押下（postback）を受け取り、
   ステータスを `PREPARING → READY_FOR_PICKUP → DELIVERING → COMPLETED` と更新（認証不要でLINEから直接呼ばれる想定）
 - `GET /api/stores/:id/settlement`, `GET /api/drivers/:id/settlement` — 精算情報（ADMIN、または本人のみ）
+- `GET /api/stores/:id/settlement.csv`, `GET /api/drivers/:id/settlement.pdf` 等 — 精算のCSV・PDF出力
+  （加盟店への請求・配送パートナー報酬の証憑として利用可能。日本語PDFは同梱のNoto Sans JPフォントで生成）
 - `GET /api/revenue/summary`, `GET /api/revenue-simulator` — 経営サマリー・収益シミュレーター（ADMIN限定）
 - `GET /api/orders/:id/dispatch-candidates` — 自動配車の候補ランキング（ADMIN限定）。①待機中ドライバー優先
   ②お届け先エリアと一致するドライバー優先 ③現在の配達件数が少ない順、で並べ替える。実際のGPS/地図連携（Phase2）
@@ -58,6 +60,13 @@ curl -X POST http://localhost:3001/api/auth/login \
   `/admin`画面の未手配注文の配送パートナー選択肢にもこの順で自動反映される
 - `GET /api/kpi` — KPIダッシュボード（ADMIN限定）: 本日注文数・本日売上・平均配達時間（全期間の完了注文ベース）・
   加盟店ランキング（全期間売上順）・ドライバー稼働率
+- `GET /api/map/overview` — 加盟店・配送パートナー・進行中注文の位置情報（ADMIN限定）。Google Maps APIキー未設定の
+  ため、`/admin`画面ではAPIキー不要のOpenStreetMap（Leaflet.js）で表示。市町村中心座標＋簡易オフセットによる
+  概算位置（実際の正確なGPS位置ではない）
+- `GET /api/alerts` — 運営アラート（ADMIN限定）: 注文未手配・加盟店未確認・配送パートナー未応答を自動検知。
+  `OPS_LINE_USER_ID`を設定すると該当LINEアカウントにも通知（未設定時は`/admin`画面とコンソールログのみ）
+- `GET /api/analytics` — 売れ筋ランキング・時間帯別/曜日別注文数・リピート率（ADMIN限定、統計集計であり
+  機械学習による予測ではない）
 
 ## セットアップ
 
