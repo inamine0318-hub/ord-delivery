@@ -1,24 +1,29 @@
 // ============================================================
-// ORD (Okinawa Resort Delivery) バックエンド（TypeScript版・モック実装）
+// ORD (Okinawa Resort Delivery) バックエンド（TypeScript版）
 // Square Webhook 受信 → Square Orders API 詳細取得 → 加盟店/ドライバーへの
 // LINE Messaging API (Flex Message) 通知
+// データはSQLite（node:sqlite、backend/data/ord.db）に永続化。
+// 加盟店・配送パートナー・管理者はID/パスワード+JWTでログインする。
 //
-// 【重要】これはモックプログラムです。実際のSquare/LINEアカウント・APIキーは
-// 使用していません。SQUARE_ACCESS_TOKEN / LINE_CHANNEL_ACCESS_TOKEN が未設定の
-// 間は、実際の外部APIへは接続せず、Webhookペイロードのデータをそのまま使い
-// コンソールへログ出力するだけの安全な動作になります。
-// 本番投入前に必ずREADME.mdの「本番投入前の注意」を確認してください。
+// 【重要】Square/LINEは実際のアカウント・APIキーを使用していません。
+// SQUARE_ACCESS_TOKEN / LINE_CHANNEL_ACCESS_TOKEN が未設定の間は、実際の外部APIへは
+// 接続せず、Webhookペイロードのデータをそのまま使いコンソールへログ出力するだけの
+// 安全な動作になります。本番投入前に必ずREADME.mdの「本番投入前の注意」を確認してください。
 // ============================================================
 
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import { Client, Environment } from 'square';
 import { messagingApi } from '@line/bot-sdk';
+import { db } from './db';
+import { hashPassword, verifyPassword, signToken, verifyToken, requireAuth } from './auth';
 
 const app = express();
-app.use(cors());
+app.use(cors({ credentials: true, origin: true }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
@@ -41,7 +46,7 @@ const lineClient: messagingApi.MessagingApiClient | null = lineConfigured
   : null;
 
 // ============================================================
-// データモデル（インメモリDB。プロセス再起動で消えます。本番はDBに置き換え）
+// データモデル（SQLiteに永続化。backend/data/ord.db、サーバー再起動でも消えない）
 // ============================================================
 type OrderStatus = 'RECEIVED' | 'PREPARING' | 'READY_FOR_PICKUP' | 'DELIVERING' | 'COMPLETED';
 
@@ -86,44 +91,219 @@ const DEFAULT_COMMISSION_RATE = 0.15;
 // 配送パートナーへの1件あたり報酬（固定報酬モデルの簡易版。距離連動制等は将来拡張）
 const DRIVER_PAYOUT_PER_DELIVERY = 400;
 
-const stores: Store[] = [];
-const drivers: Driver[] = [];
-const orders: Order[] = [];
-let nextStoreId = 1;
-let nextDriverId = 1;
-let nextOrderId = 1;
+// ============================================================
+// DBアクセス層（行⇔アプリ内型のマッピング）
+// ============================================================
+interface StoreRow {
+  id: number;
+  name: string;
+  line_user_id: string;
+  commission_rate: number;
+  username: string;
+  password_hash: string;
+}
+interface DriverRow {
+  id: number;
+  name: string;
+  line_user_id: string;
+  status: string;
+  username: string;
+  password_hash: string;
+}
+interface AdminRow {
+  id: number;
+  username: string;
+  password_hash: string;
+}
+interface OrderRow {
+  id: number;
+  square_order_id: string;
+  items_json: string;
+  villa_name: string;
+  room_number: string;
+  status: string;
+  store_id: number | null;
+  driver_id: number | null;
+  created_at: string;
+  customer_line_id: string | null;
+  total_money_json: string | null;
+}
+
+const rowToStore = (r: StoreRow): Store => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, commissionRate: r.commission_rate });
+const rowToDriver = (r: DriverRow): Driver => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, status: r.status as 'IDLE' | 'BUSY' });
+const rowToOrder = (r: OrderRow): Order => ({
+  id: r.id,
+  squareOrderId: r.square_order_id,
+  items: JSON.parse(r.items_json),
+  villaName: r.villa_name,
+  roomNumber: r.room_number,
+  status: r.status as OrderStatus,
+  storeId: r.store_id,
+  driverId: r.driver_id,
+  createdAt: r.created_at,
+  customerLineId: r.customer_line_id,
+  totalMoney: r.total_money_json ? JSON.parse(r.total_money_json) : null,
+});
+
+function getAllStores(): Store[] {
+  return (db.prepare('SELECT * FROM stores ORDER BY id').all() as unknown as StoreRow[]).map(rowToStore);
+}
+function getStoreById(id: number): Store | undefined {
+  const row = db.prepare('SELECT * FROM stores WHERE id = ?').get(id) as StoreRow | undefined;
+  return row ? rowToStore(row) : undefined;
+}
+function getStoreRowByUsername(username: string): StoreRow | undefined {
+  return db.prepare('SELECT * FROM stores WHERE username = ?').get(username) as StoreRow | undefined;
+}
+function insertStore(name: string, lineUserId: string, commissionRate: number, username: string, passwordHash: string): Store {
+  const info = db
+    .prepare('INSERT INTO stores (name, line_user_id, commission_rate, username, password_hash) VALUES (?,?,?,?,?)')
+    .run(name, lineUserId, commissionRate, username, passwordHash);
+  return { id: Number(info.lastInsertRowid), name, lineUserId, commissionRate };
+}
+
+function getAllDrivers(): Driver[] {
+  return (db.prepare('SELECT * FROM drivers ORDER BY id').all() as unknown as DriverRow[]).map(rowToDriver);
+}
+function getDriverById(id: number): Driver | undefined {
+  const row = db.prepare('SELECT * FROM drivers WHERE id = ?').get(id) as DriverRow | undefined;
+  return row ? rowToDriver(row) : undefined;
+}
+function getDriverRowByUsername(username: string): DriverRow | undefined {
+  return db.prepare('SELECT * FROM drivers WHERE username = ?').get(username) as DriverRow | undefined;
+}
+function insertDriver(name: string, lineUserId: string, username: string, passwordHash: string): Driver {
+  const info = db
+    .prepare("INSERT INTO drivers (name, line_user_id, status, username, password_hash) VALUES (?,?,'IDLE',?,?)")
+    .run(name, lineUserId, username, passwordHash);
+  return { id: Number(info.lastInsertRowid), name, lineUserId, status: 'IDLE' };
+}
+function updateDriverStatus(id: number, status: 'IDLE' | 'BUSY') {
+  db.prepare('UPDATE drivers SET status = ? WHERE id = ?').run(status, id);
+}
+
+function getAdminRowByUsername(username: string): AdminRow | undefined {
+  return db.prepare('SELECT * FROM admins WHERE username = ?').get(username) as AdminRow | undefined;
+}
+function seedDefaultAdminIfEmpty() {
+  const { c } = db.prepare('SELECT COUNT(*) as c FROM admins').get() as { c: number };
+  if (c > 0) return;
+  const password = crypto.randomBytes(6).toString('hex');
+  db.prepare('INSERT INTO admins (username, password_hash) VALUES (?, ?)').run('admin', hashPassword(password));
+  console.log('==================================================');
+  console.log('[初回起動] 管理者アカウントを作成しました');
+  console.log('  ユーザー名: admin');
+  console.log('  初期パスワード: ' + password);
+  console.log('  ※この画面にしか表示されません。必ず控えて安全な場所に保管してください。');
+  console.log('==================================================');
+}
+seedDefaultAdminIfEmpty();
+
+function getAllOrders(): Order[] {
+  return (db.prepare('SELECT * FROM orders ORDER BY id').all() as unknown as OrderRow[]).map(rowToOrder);
+}
+function getOrderById(id: number): Order | undefined {
+  const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined;
+  return row ? rowToOrder(row) : undefined;
+}
+function insertOrder(o: Omit<Order, 'id'>): Order {
+  const info = db
+    .prepare(
+      `INSERT INTO orders (square_order_id, items_json, villa_name, room_number, status, store_id, driver_id, created_at, customer_line_id, total_money_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      o.squareOrderId,
+      JSON.stringify(o.items),
+      o.villaName,
+      o.roomNumber,
+      o.status,
+      o.storeId,
+      o.driverId,
+      o.createdAt,
+      o.customerLineId,
+      o.totalMoney ? JSON.stringify(o.totalMoney) : null
+    );
+  return { ...o, id: Number(info.lastInsertRowid) };
+}
+function updateOrderDispatch(id: number, storeId: number, driverId: number, status: OrderStatus) {
+  db.prepare('UPDATE orders SET store_id = ?, driver_id = ?, status = ? WHERE id = ?').run(storeId, driverId, status, id);
+}
+function updateOrderStatus(id: number, status: OrderStatus) {
+  db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id);
+}
 
 // ============================================================
-// 加盟店・ドライバー管理API
+// 認証API（加盟店・配送パートナー・管理者共通のログイン窓口）
 // ============================================================
-app.post('/api/stores', (req: Request, res: Response) => {
-  const { name, lineUserId, commissionRate } = req.body as { name?: string; lineUserId?: string; commissionRate?: number };
-  if (!name || !lineUserId) {
-    return res.status(400).json({ ok: false, error: 'name と lineUserId は必須です' });
+app.post('/api/auth/login', (req: Request, res: Response) => {
+  const { role, username, password } = req.body as { role?: string; username?: string; password?: string };
+  if (!role || !username || !password) {
+    return res.status(400).json({ ok: false, error: 'role, username, password は必須です' });
+  }
+
+  if (role === 'ADMIN') {
+    const row = getAdminRowByUsername(username);
+    if (!row || !verifyPassword(password, row.password_hash)) return res.status(401).json({ ok: false, error: 'ユーザー名またはパスワードが違います' });
+    const token = signToken({ role: 'ADMIN', id: row.id, name: row.username });
+    return res.json({ ok: true, token, role: 'ADMIN', id: row.id, name: row.username });
+  }
+  if (role === 'STORE') {
+    const row = getStoreRowByUsername(username);
+    if (!row || !verifyPassword(password, row.password_hash)) return res.status(401).json({ ok: false, error: 'ユーザー名またはパスワードが違います' });
+    const token = signToken({ role: 'STORE', id: row.id, name: row.name });
+    return res.json({ ok: true, token, role: 'STORE', id: row.id, name: row.name });
+  }
+  if (role === 'DRIVER') {
+    const row = getDriverRowByUsername(username);
+    if (!row || !verifyPassword(password, row.password_hash)) return res.status(401).json({ ok: false, error: 'ユーザー名またはパスワードが違います' });
+    const token = signToken({ role: 'DRIVER', id: row.id, name: row.name });
+    return res.json({ ok: true, token, role: 'DRIVER', id: row.id, name: row.name });
+  }
+  return res.status(400).json({ ok: false, error: 'role は ADMIN / STORE / DRIVER のいずれかを指定してください' });
+});
+
+// ============================================================
+// 加盟店・ドライバー管理API（登録はADMINのみ）
+// ============================================================
+app.post('/api/stores', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const { name, lineUserId, commissionRate, username, password } = req.body as {
+    name?: string;
+    lineUserId?: string;
+    commissionRate?: number;
+    username?: string;
+    password?: string;
+  };
+  if (!name || !lineUserId || !username || !password) {
+    return res.status(400).json({ ok: false, error: 'name, lineUserId, username, password は必須です' });
+  }
+  if (getStoreRowByUsername(username)) {
+    return res.status(409).json({ ok: false, error: 'そのユーザー名は既に使用されています' });
   }
   const rate =
     typeof commissionRate === 'number' && commissionRate >= 0 && commissionRate <= 1 ? commissionRate : DEFAULT_COMMISSION_RATE;
-  const store: Store = { id: nextStoreId++, name, lineUserId, commissionRate: rate };
-  stores.push(store);
+  const store = insertStore(name, lineUserId, rate, username, hashPassword(password));
   res.status(201).json({ ok: true, store });
 });
 
-app.get('/api/stores', (_req: Request, res: Response) => {
-  res.json(stores);
+app.get('/api/stores', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json(getAllStores());
 });
 
-app.post('/api/drivers', (req: Request, res: Response) => {
-  const { name, lineUserId } = req.body as { name?: string; lineUserId?: string };
-  if (!name || !lineUserId) {
-    return res.status(400).json({ ok: false, error: 'name と lineUserId は必須です' });
+app.post('/api/drivers', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const { name, lineUserId, username, password } = req.body as { name?: string; lineUserId?: string; username?: string; password?: string };
+  if (!name || !lineUserId || !username || !password) {
+    return res.status(400).json({ ok: false, error: 'name, lineUserId, username, password は必須です' });
   }
-  const driver: Driver = { id: nextDriverId++, name, lineUserId, status: 'IDLE' };
-  drivers.push(driver);
+  if (getDriverRowByUsername(username)) {
+    return res.status(409).json({ ok: false, error: 'そのユーザー名は既に使用されています' });
+  }
+  const driver = insertDriver(name, lineUserId, username, hashPassword(password));
   res.status(201).json({ ok: true, driver });
 });
 
-app.get('/api/drivers', (_req: Request, res: Response) => {
-  res.json(drivers);
+app.get('/api/drivers', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json(getAllDrivers());
 });
 
 // ============================================================
@@ -223,8 +403,7 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
 
   const delivery = parseDeliveryInfo(note);
 
-  const order: Order = {
-    id: nextOrderId++,
+  const order = insertOrder({
     squareOrderId,
     items,
     villaName: delivery.villaName,
@@ -237,14 +416,13 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
     // (index.html)からの連携送信時のみ、お客様がLINE通知を希望した場合に付与される。
     customerLineId: typeof rawOrder.customer_line_id === 'string' ? rawOrder.customer_line_id : null,
     totalMoney,
-  };
-  orders.push(order);
+  });
   console.log('[Square Webhook受信]', JSON.stringify(order, null, 2));
   res.status(200).json({ ok: true, orderId: order.id });
 });
 
-app.get('/api/orders', (_req: Request, res: Response) => {
-  res.json(orders);
+app.get('/api/orders', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json(getAllOrders());
 });
 
 // ============================================================
@@ -252,17 +430,20 @@ app.get('/api/orders', (_req: Request, res: Response) => {
 // 【注意】あくまで概算計算です。実際の入出金・請求書発行・税務処理は別途必要です。
 // ============================================================
 function commissionRateForStore(storeId: number | null): number {
-  const store = stores.find(s => s.id === storeId);
+  const store = storeId != null ? getStoreById(storeId) : undefined;
   return store ? store.commissionRate : DEFAULT_COMMISSION_RATE;
 }
 
-// 加盟店の精算（完了注文の売上合計・ORD手数料・加盟店への支払額）
-app.get('/api/stores/:id/settlement', (req: Request, res: Response) => {
+// 加盟店の精算（完了注文の売上合計・ORD手数料・加盟店への支払額）。ADMIN、または本人（加盟店）のみ閲覧可
+app.get('/api/stores/:id/settlement', requireAuth('ADMIN', 'STORE'), (req: Request, res: Response) => {
   const storeId = Number(req.params.id);
-  const store = stores.find(s => s.id === storeId);
+  if (req.auth!.role === 'STORE' && req.auth!.id !== storeId) {
+    return res.status(403).json({ ok: false, error: '他の加盟店の精算情報は閲覧できません' });
+  }
+  const store = getStoreById(storeId);
   if (!store) return res.status(404).json({ ok: false, error: '加盟店が見つかりません' });
 
-  const completed = orders.filter(o => o.storeId === storeId && o.status === 'COMPLETED' && o.totalMoney);
+  const completed = getAllOrders().filter(o => o.storeId === storeId && o.status === 'COMPLETED' && o.totalMoney);
   const grossAmount = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
   const commissionAmount = Math.round(grossAmount * store.commissionRate);
   const netPayout = grossAmount - commissionAmount;
@@ -280,13 +461,16 @@ app.get('/api/stores/:id/settlement', (req: Request, res: Response) => {
   });
 });
 
-// 配送パートナーの精算（完了配達件数×固定報酬）
-app.get('/api/drivers/:id/settlement', (req: Request, res: Response) => {
+// 配送パートナーの精算（完了配達件数×固定報酬）。ADMIN、または本人（配送パートナー）のみ閲覧可
+app.get('/api/drivers/:id/settlement', requireAuth('ADMIN', 'DRIVER'), (req: Request, res: Response) => {
   const driverId = Number(req.params.id);
-  const driver = drivers.find(d => d.id === driverId);
+  if (req.auth!.role === 'DRIVER' && req.auth!.id !== driverId) {
+    return res.status(403).json({ ok: false, error: '他の配送パートナーの精算情報は閲覧できません' });
+  }
+  const driver = getDriverById(driverId);
   if (!driver) return res.status(404).json({ ok: false, error: 'ドライバーが見つかりません' });
 
-  const deliveryCount = orders.filter(o => o.driverId === driverId && o.status === 'COMPLETED').length;
+  const deliveryCount = getAllOrders().filter(o => o.driverId === driverId && o.status === 'COMPLETED').length;
   const payoutAmount = deliveryCount * DRIVER_PAYOUT_PER_DELIVERY;
 
   res.json({
@@ -302,24 +486,25 @@ app.get('/api/drivers/:id/settlement', (req: Request, res: Response) => {
 
 // 経営サマリー（全加盟店・全ドライバー合算のORD粗利）
 function revenueSummary() {
-  const completed = orders.filter(o => o.status === 'COMPLETED' && o.totalMoney);
+  const allOrders = getAllOrders();
+  const completed = allOrders.filter(o => o.status === 'COMPLETED' && o.totalMoney);
   const grossAmount = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
   const commissionAmount = completed.reduce(
     (sum, o) => sum + Math.round((o.totalMoney?.amount || 0) * commissionRateForStore(o.storeId)),
     0
   );
-  const deliveryCount = orders.filter(o => o.status === 'COMPLETED' && o.driverId).length;
+  const deliveryCount = allOrders.filter(o => o.status === 'COMPLETED' && o.driverId).length;
   const driverPayoutTotal = deliveryCount * DRIVER_PAYOUT_PER_DELIVERY;
   const ordGrossProfit = commissionAmount - driverPayoutTotal;
   return { completedOrderCount: completed.length, grossAmount, commissionAmount, driverPayoutTotal, ordGrossProfit, currency: 'JPY' };
 }
 
-app.get('/api/revenue/summary', (_req: Request, res: Response) => {
+app.get('/api/revenue/summary', requireAuth('ADMIN'), (_req: Request, res: Response) => {
   res.json({ ok: true, ...revenueSummary() });
 });
 
 // 収益シミュレーター（実データ不要。想定値から月商・ORD粗利を試算する）
-app.get('/api/revenue-simulator', (req: Request, res: Response) => {
+app.get('/api/revenue-simulator', requireAuth('ADMIN'), (req: Request, res: Response) => {
   const q = req.query as Record<string, string>;
   const dailyOrders = Number(q.dailyOrders) || 20;
   const avgOrderValue = Number(q.avgOrderValue) || 2500;
@@ -347,12 +532,63 @@ app.get('/api/revenue-simulator', (req: Request, res: Response) => {
   });
 });
 
-// ---------- 簡易管理画面 ----------
-app.get('/admin', (_req: Request, res: Response) => {
+// ============================================================
+// 管理画面（ログイン必須。Cookie(ord_admin_session)にJWTを保持する）
+// ============================================================
+function renderAdminLoginHtml(error?: string): string {
+  return `<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>ORD 管理者ログイン</title>
+<style>
+body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;background:#14181C;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
+form{background:#fff;color:#1F2D3A;padding:32px;border-radius:12px;width:280px;}
+h2{margin-top:0;font-size:16px;}
+input{width:100%;box-sizing:border-box;padding:10px;margin-bottom:10px;border:1px solid #E7E0D2;border-radius:6px;font-size:13px;}
+button{width:100%;padding:10px;background:#0086A8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;}
+.err{color:#C0392B;font-size:12px;margin-bottom:10px;}
+</style></head>
+<body>
+<form method="POST" action="/admin/login">
+  <h2>ORD 管理者ログイン</h2>
+  ${error ? `<div class="err">${error}</div>` : ''}
+  <input name="username" placeholder="ユーザー名" autofocus>
+  <input name="password" type="password" placeholder="パスワード">
+  <button type="submit">ログイン</button>
+</form>
+</body></html>`;
+}
+
+app.post('/admin/login', (req: Request, res: Response) => {
+  const { username, password } = req.body as { username?: string; password?: string };
+  const row = username ? getAdminRowByUsername(username) : undefined;
+  if (!row || !password || !verifyPassword(password, row.password_hash)) {
+    return res.status(401).send(renderAdminLoginHtml('ユーザー名またはパスワードが違います'));
+  }
+  const token = signToken({ role: 'ADMIN', id: row.id, name: row.username });
+  res.cookie('ord_admin_session', token, { httpOnly: true, sameSite: 'lax', maxAge: 12 * 60 * 60 * 1000 });
+  res.redirect('/admin');
+});
+
+app.get('/admin/logout', (_req: Request, res: Response) => {
+  res.clearCookie('ord_admin_session');
+  res.redirect('/admin');
+});
+
+app.get('/admin', (req: Request, res: Response) => {
+  const cookieHeader = req.headers.cookie || '';
+  const match = cookieHeader.split(';').map(s => s.trim()).find(s => s.startsWith('ord_admin_session='));
+  const token = match ? decodeURIComponent(match.split('=')[1]) : null;
+  const authed = token ? verifyToken(token) : null;
+  if (!authed || authed.role !== 'ADMIN') {
+    return res.send(renderAdminLoginHtml());
+  }
   res.send(renderAdminHtml());
 });
 
 function renderAdminHtml(): string {
+  const stores = getAllStores();
+  const drivers = getAllDrivers();
+  const orders = getAllOrders();
+
   const storeOptions = (selected: number | null) =>
     stores.map(s => `<option value="${s.id}" ${s.id === selected ? 'selected' : ''}>${s.name}</option>`).join('');
   const driverOptions = (selected: number | null) =>
@@ -387,7 +623,7 @@ function renderAdminHtml(): string {
     .join('');
 
   return `<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8"><title>ORD 受注管理（モック・TypeScript版）</title>
+<html lang="ja"><head><meta charset="UTF-8"><title>ORD 受注管理（TypeScript版）</title>
 <style>
 body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;padding:24px;background:#f7f6f2;color:#1F2D3A;}
 h2{margin-bottom:4px;} p{color:#6B7680;font-size:13px;}
@@ -399,9 +635,11 @@ select{font-size:12px;margin-bottom:4px;display:block;}
 .badge{display:inline-block;background:#E8A33D;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;}
 fieldset{background:#fff;border:1px solid #E7E0D2;border-radius:8px;padding:12px;margin-bottom:16px;}
 input{padding:6px;font-size:12.5px;margin-right:6px;}
+.logout{float:right;font-size:12px;color:#0086A8;}
 </style></head>
 <body>
-<h2>ORD 受注管理（モック・TypeScript版）</h2>
+<a class="logout" href="/admin/logout">ログアウト</a>
+<h2>ORD 受注管理（TypeScript版）</h2>
 <p>Square連携: <span class="badge">${squareConfigured ? '実接続' : '未設定（Webhookペイロードのデータのみ使用）'}</span>
 LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}</span></p>
 
@@ -417,6 +655,8 @@ LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（�
   <input id="store-name" placeholder="店舗名">
   <input id="store-line" placeholder="LINE User ID">
   <input id="store-commission" placeholder="手数料率(%) 例:15" style="width:110px;">
+  <input id="store-username" placeholder="ログインID">
+  <input id="store-password" type="password" placeholder="パスワード">
   <button onclick="createStore()">登録</button>
   <p>登録済み: ${stores.map(s => s.name).join('、') || '(なし)'}</p>
   <ul>${storeSettlementRows || '<li>(なし)</li>'}</ul>
@@ -426,6 +666,8 @@ LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（�
   <legend>配送パートナー 登録</legend>
   <input id="driver-name" placeholder="ドライバー名">
   <input id="driver-line" placeholder="LINE User ID">
+  <input id="driver-username" placeholder="ログインID">
+  <input id="driver-password" type="password" placeholder="パスワード">
   <button onclick="createDriver()">登録</button>
   <p>登録済み: ${drivers.map(d => `${d.name}(${d.status})`).join('、') || '(なし)'}</p>
   <ul>${driverSettlementRows || '<li>(なし)</li>'}</ul>
@@ -453,7 +695,11 @@ async function createStore(){
   const lineUserId = document.getElementById('store-line').value;
   const commissionPercent = document.getElementById('store-commission').value;
   const commissionRate = commissionPercent ? Number(commissionPercent)/100 : undefined;
-  await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, commissionRate})});
+  const username = document.getElementById('store-username').value;
+  const password = document.getElementById('store-password').value;
+  const res = await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, commissionRate, username, password})});
+  const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
   location.reload();
 }
 async function viewStoreSettlement(id){
@@ -478,6 +724,7 @@ async function runSimulator(){
   });
   const res = await fetch('/api/revenue-simulator?'+params.toString());
   const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
   document.getElementById('sim-result').textContent =
     '期間合計注文数: '+d.totalOrders.toLocaleString()+'件\\n'+
     '総売上(GMV): ¥'+d.grossGmv.toLocaleString()+'\\n'+
@@ -488,7 +735,11 @@ async function runSimulator(){
 async function createDriver(){
   const name = document.getElementById('driver-name').value;
   const lineUserId = document.getElementById('driver-line').value;
-  await fetch('/api/drivers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId})});
+  const username = document.getElementById('driver-username').value;
+  const password = document.getElementById('driver-password').value;
+  const res = await fetch('/api/drivers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, username, password})});
+  const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
   location.reload();
 }
 async function dispatchOrder(id){
@@ -664,31 +915,30 @@ async function pushLine(to: string, message: messagingApi.FlexMessage): Promise<
 }
 
 // ============================================================
-// 手配開始（管理画面から加盟店・ドライバーを紐付けて実行）
+// 手配開始（管理画面から加盟店・ドライバーを紐付けて実行、ADMINのみ）
 // ============================================================
-app.post('/api/orders/:id/dispatch', async (req: Request, res: Response) => {
-  const order = orders.find(o => o.id === Number(req.params.id));
+app.post('/api/orders/:id/dispatch', requireAuth('ADMIN'), async (req: Request, res: Response) => {
+  const order = getOrderById(Number(req.params.id));
   if (!order) return res.status(404).json({ ok: false, error: '注文が見つかりません' });
 
   const { storeId, driverId } = req.body as { storeId?: number; driverId?: number };
-  const store = stores.find(s => s.id === (storeId ?? order.storeId ?? undefined));
-  const driver = drivers.find(d => d.id === (driverId ?? order.driverId ?? undefined));
+  const store = getStoreById(storeId ?? order.storeId ?? -1);
+  const driver = getDriverById(driverId ?? order.driverId ?? -1);
 
   if (!store) return res.status(400).json({ ok: false, error: '加盟店が指定/紐付けされていません（先に加盟店を登録してください）' });
   if (!driver) return res.status(400).json({ ok: false, error: 'ドライバーが指定/紐付けされていません（先にドライバーを登録してください）' });
 
-  order.storeId = store.id;
-  order.driverId = driver.id;
+  const updatedOrder: Order = { ...order, storeId: store.id, driverId: driver.id, status: 'PREPARING' };
 
   try {
-    await pushLine(store.lineUserId, buildStoreFlex(order));
-    await pushLine(driver.lineUserId, buildDriverFlex(order));
-    order.status = 'PREPARING';
-    driver.status = 'BUSY';
-    if (order.customerLineId) {
-      await pushLine(order.customerLineId, buildCustomerFlex(order, 'PREPARING'));
+    await pushLine(store.lineUserId, buildStoreFlex(updatedOrder));
+    await pushLine(driver.lineUserId, buildDriverFlex(updatedOrder));
+    updateOrderDispatch(order.id, store.id, driver.id, 'PREPARING');
+    updateDriverStatus(driver.id, 'BUSY');
+    if (updatedOrder.customerLineId) {
+      await pushLine(updatedOrder.customerLineId, buildCustomerFlex(updatedOrder, 'PREPARING'));
     }
-    res.json({ ok: true, order });
+    res.json({ ok: true, order: updatedOrder });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
@@ -711,39 +961,38 @@ app.post('/webhooks/line', (req: Request, res: Response) => {
       const params = new URLSearchParams(ev.postback.data);
       const action = params.get('action');
       const orderId = Number(params.get('orderId'));
-      const order = orders.find(o => o.id === orderId);
+      const order = getOrderById(orderId);
       if (!order) return;
 
+      let newStatus: OrderStatus | null = null;
       switch (action) {
         case 'STORE_START':
-          order.status = 'PREPARING';
+          newStatus = 'PREPARING';
           break;
         case 'STORE_READY':
-          order.status = 'READY_FOR_PICKUP';
+          newStatus = 'READY_FOR_PICKUP';
           break;
         case 'DRIVER_ACCEPT':
-          order.status = 'READY_FOR_PICKUP';
+          newStatus = 'READY_FOR_PICKUP';
           break;
         case 'DRIVER_PICKUP':
-          order.status = 'DELIVERING';
+          newStatus = 'DELIVERING';
           break;
         case 'DRIVER_COMPLETE':
-          order.status = 'COMPLETED';
-          if (order.driverId) {
-            const driver = drivers.find(d => d.id === order.driverId);
-            if (driver) driver.status = 'IDLE';
-          }
-          if (order.customerLineId) {
-            pushLine(order.customerLineId, buildCustomerFlex(order, 'COMPLETED')).catch(e =>
-              console.error('[お客様LINE通知エラー]', e)
-            );
-          }
+          newStatus = 'COMPLETED';
+          if (order.driverId) updateDriverStatus(order.driverId, 'IDLE');
           break;
         default:
           console.log(`  → 未知のaction: ${action}`);
           return;
       }
-      console.log(`  → 注文#${orderId} ステータス更新: ${order.status}`);
+      updateOrderStatus(order.id, newStatus);
+      if (newStatus === 'COMPLETED' && order.customerLineId) {
+        pushLine(order.customerLineId, buildCustomerFlex({ ...order, status: newStatus }, 'COMPLETED')).catch(e =>
+          console.error('[お客様LINE通知エラー]', e)
+        );
+      }
+      console.log(`  → 注文#${orderId} ステータス更新: ${newStatus}`);
     }
   });
   res.status(200).send('OK');

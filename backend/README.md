@@ -1,29 +1,57 @@
-# ORD Backend（モック・TypeScript版）— Square Webhook → LINE Messaging API 連携
+# ORD Backend（TypeScript版）— Square Webhook → LINE Messaging API 連携
 
 「Okinawa Resort Delivery（ORD）」のお客様がSquareで注文・決済した内容を受け取り、
 管理画面で加盟店様・配送パートナーを紐付けて「手配開始」すると、それぞれのLINE公式
 アカウントへ自動でFlex Message通知（ワンタップアクションボタン付き）を送るバックエンドです。
 
 Node.js + Express + TypeScript、公式SDK（`square`, `@line/bot-sdk`）を使用しています。
+データはSQLite（Node.js標準の`node:sqlite`、`backend/data/ord.db`）に永続化されるため、
+サーバーを再起動しても注文・加盟店・配送パートナー・管理者アカウントは消えません。
 
-**このプログラムは実際のSquare/LINEアカウント・APIキーを一切使用していません。**
+**Square/LINEは実際のアカウント・APIキーを一切使用していません。**
 `SQUARE_ACCESS_TOKEN` / `LINE_CHANNEL_ACCESS_TOKEN` が未設定（デフォルト）の間は、
 実際の外部APIへは接続せず、Webhookペイロードのデータをそのまま使ってコンソールへ
 ログ出力するだけの安全なモック動作になります。
 
+## 認証（加盟店・配送パートナー・管理者の3ロール）
+
+加盟店・配送パートナーの登録や、注文一覧・手配・精算・経営サマリーなどの管理系APIは
+すべてログイン必須です（JWT）。初回起動時に管理者アカウント`admin`が自動作成され、
+**ランダムな初期パスワードが起動ログにのみ表示されます**（控えておいてください）。
+
+```bash
+curl -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"role":"ADMIN","username":"admin","password":"（起動ログに表示された初期パスワード）"}'
+# → { "ok": true, "token": "eyJ...", ... }
+```
+
+取得した`token`を以降のAPIリクエストに `Authorization: Bearer <token>` として付与します。
+加盟店・配送パートナーも同じ`/api/auth/login`から`role`を`STORE`/`DRIVER`にしてログインでき、
+自分の精算情報（`/api/stores/:id/settlement`, `/api/drivers/:id/settlement`）のみ閲覧できます
+（他店舗・他ドライバーの精算は403で拒否されます）。
+
+`/admin`画面はブラウザCookie（`ord_admin_session`）でログイン状態を保持します。
+未ログイン時はログインフォームが表示され、`admin`アカウントでログインすると
+管理画面（経営サマリー・加盟店/配送パートナー登録・受注一覧・収益シミュレーター）が見られます。
+
 ## できること（実際に動作確認済み）
 
-- `POST /api/stores`, `GET /api/stores` — 加盟店の登録・一覧取得
-- `POST /api/drivers`, `GET /api/drivers` — 配送パートナーの登録・一覧取得
-- `POST /webhooks/square` — Square注文Webhookのモック受信。`SQUARE_ACCESS_TOKEN`が
+- `POST /api/auth/login` — 加盟店/配送パートナー/管理者共通のログイン窓口（JWT発行）
+- `POST /api/stores`, `GET /api/stores` — 加盟店の登録（ID/パスワード必須）・一覧取得（ADMIN限定）
+- `POST /api/drivers`, `GET /api/drivers` — 配送パートナーの登録（ID/パスワード必須）・一覧取得（ADMIN限定）
+- `POST /webhooks/square` — Square注文Webhookの受信（署名検証は省略、認証不要でSquareから直接呼ばれる想定）。`SQUARE_ACCESS_TOKEN`が
   設定されていれば実際に `squareClient.ordersApi.retrieveOrder()` で詳細取得を試み、
-  未設定または取得失敗時はWebhookペイロード自体のデータで代替する
-- `GET /api/orders` — 受注一覧API
-- `GET /admin` — 加盟店/ドライバー登録フォーム＋受注一覧＋手配開始ボタンのある簡易管理画面
+  未設定または取得失敗時はWebhookペイロード自体のデータ（`total_money`含む）で代替する
+- `GET /api/orders` — 受注一覧API（ADMIN限定）
+- `GET /admin` — ログイン必須の管理画面（加盟店/ドライバー登録フォーム＋経営サマリー＋
+  収益シミュレーター＋受注一覧＋手配開始ボタン）
 - `POST /api/orders/:id/dispatch` — 指定した加盟店・配送パートナーへLINE Flex Message
-  （調理開始リクエスト／配達オファー）を送信し、注文ステータスを`PREPARING`に更新
+  （調理開始リクエスト／配達オファー）を送信し、注文ステータスを`PREPARING`に更新（ADMIN限定）
 - `POST /webhooks/line` — LINEのFlex Messageボタン押下（postback）を受け取り、
-  ステータスを `PREPARING → READY_FOR_PICKUP → DELIVERING → COMPLETED` と更新
+  ステータスを `PREPARING → READY_FOR_PICKUP → DELIVERING → COMPLETED` と更新（認証不要でLINEから直接呼ばれる想定）
+- `GET /api/stores/:id/settlement`, `GET /api/drivers/:id/settlement` — 精算情報（ADMIN、または本人のみ）
+- `GET /api/revenue/summary`, `GET /api/revenue-simulator` — 経営サマリー・収益シミュレーター（ADMIN限定）
 
 ## セットアップ
 
@@ -38,24 +66,40 @@ npm start     # tsxで一度だけ起動
 npm run build && npm run start:prod
 ```
 
+初回起動時、コンソールに管理者アカウント`admin`の初期パスワードが表示されます
+（**この時しか表示されないので必ず控えてください**）。
 起動すると `http://localhost:3001/admin` で管理画面が見られます。
-型チェックのみ行う場合は `npx tsc --noEmit` を実行してください（このモックは
-`npx tsc --noEmit` でエラー0件、`npm run build` でのビルドも実際に確認済みです）。
+型チェックのみ行う場合は `npx tsc --noEmit` を実行してください（`npx tsc --noEmit` で
+エラー0件、`npm run build` でのビルド、DB永続化・認証・アクセス制御を含む一連の動作を
+実際にサーバー起動→curlで検証済みです）。
+
+データベースファイルは`backend/data/ord.db`に作成されます（`.gitignore`済み、
+リポジトリには含まれません）。まっさらな状態からやり直したい場合はこのファイルを
+削除して再起動してください（削除すると管理者アカウントも再作成され、新しい初期
+パスワードが発行されます）。
 
 ## 動作テスト手順（実際に確認した一連の流れ）
 
 ```bash
-# 1. 加盟店を登録
-curl -X POST http://localhost:3001/api/stores \
+# 0. 管理者ログイン（起動ログに表示された初期パスワードを使用）
+curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"name":"琉球食堂 ちゅら島","lineUserId":"Ustore001"}'
+  -d '{"role":"ADMIN","username":"admin","password":"（起動ログのパスワード）"}'
+# → tokenを控えて、以降 -H "Authorization: Bearer <token>" を付与する
+
+TOKEN="（上で取得したtoken）"
+
+# 1. 加盟店を登録（ID/パスワード必須、手数料率は任意・省略時15%）
+curl -X POST http://localhost:3001/api/stores \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"琉球食堂 ちゅら島","lineUserId":"Ustore001","commissionRate":0.15,"username":"churashima1","password":"pass1234"}'
 
 # 2. 配送パートナーを登録
 curl -X POST http://localhost:3001/api/drivers \
-  -H "Content-Type: application/json" \
-  -d '{"name":"金城さん","lineUserId":"Udriver001"}'
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"金城さん","lineUserId":"Udriver001","username":"kinjo1","password":"pass1234"}'
 
-# 3. Square注文Webhookをシミュレーション
+# 3. Square注文Webhookをシミュレーション（認証不要）
 curl -X POST http://localhost:3001/webhooks/square \
   -H "Content-Type: application/json" \
   -d '{
@@ -67,7 +111,8 @@ curl -X POST http://localhost:3001/webhooks/square \
           "note": "ヴィラ名:コーラルテラス恩納 / 部屋番号:805",
           "line_items": [
             {"name": "ソーキそば", "quantity": "2", "modifiers": []}
-          ]
+          ],
+          "total_money": {"amount": 3600, "currency": "JPY"}
         }
       }
     }
@@ -75,18 +120,24 @@ curl -X POST http://localhost:3001/webhooks/square \
 
 # 4. 手配開始（加盟店ID=1, ドライバーID=1へ紐付け）
 curl -X POST http://localhost:3001/api/orders/1/dispatch \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"storeId":1,"driverId":1}'
 # → コンソールにLINE Flex MessageのJSONがログ出力される（LINE_CHANNEL_ACCESS_TOKEN未設定時）
 
-# 5. LINEボタン押下（postback）をシミュレーション
+# 5. LINEボタン押下（postback）をシミュレーション（認証不要）
 curl -X POST http://localhost:3001/webhooks/line \
   -H "Content-Type: application/json" \
   -d '{"events":[{"type":"postback","postback":{"data":"action=DRIVER_COMPLETE&orderId=1"}}]}'
 # → 注文ステータスがCOMPLETEDに、ドライバーがIDLEに戻る
+
+# 6. 加盟店の精算を確認
+curl http://localhost:3001/api/stores/1/settlement -H "Authorization: Bearer $TOKEN"
 ```
 
-`http://localhost:3001/admin` を開くと、上記の状態がブラウザ上でも確認できます。
+`http://localhost:3001/admin` を開き、`admin`アカウントでログインすると、
+上記の状態がブラウザ上でも確認できます（日本語を含むJSONをcurlで送る場合、
+Git Bash環境では文字化けすることがあるため、JSONファイルに保存して
+`--data-binary "@ファイル名"`で送ることを推奨します）。
 
 ## ヴィラ名・部屋番号の入力方法についての提案
 
