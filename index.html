@@ -710,6 +710,7 @@ function syncOrderToBackend(order){
           })),
           customer_line_id: state.customerLineId || null,
           total_money: { amount: order.total + 300, currency: 'JPY' },
+          area: order.hotel ? order.hotel.area : null,
         },
       },
     },

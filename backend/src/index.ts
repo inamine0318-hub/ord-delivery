@@ -55,12 +55,14 @@ interface Store {
   name: string;
   lineUserId: string;
   commissionRate: number; // ORDが徴収する手数料率（0〜1、例:0.15 = 15%）
+  area: string; // 主な営業エリア（例:恩納村、北谷町）。自動配車の距離代替指標として使用
 }
 interface Driver {
   id: number;
   name: string;
   lineUserId: string;
   status: 'IDLE' | 'BUSY';
+  area: string; // 主な稼働エリア。実際のGPS連携（Phase2）までの距離代替指標
 }
 interface OrderItem {
   name: string;
@@ -83,6 +85,8 @@ interface Order {
   createdAt: string;
   customerLineId: string | null; // お客様がLINE通知を希望した場合のLINE User ID（任意）
   totalMoney: Money | null; // 注文金額（Square Orders APIから取得、または連携元ペイロードのtotal_moneyで代替）
+  area: string | null; // お届け先エリア（ORDフロントのホテルデータ由来。自動配車の距離代替指標）
+  completedAt: string | null; // 配達完了(COMPLETED)になった時刻。平均配達時間の算出に使用
 }
 
 // 加盟店ごとのcommissionRateが未設定/不正な場合に使うデフォルト手数料率。
@@ -101,6 +105,7 @@ interface StoreRow {
   commission_rate: number;
   username: string;
   password_hash: string;
+  area: string;
 }
 interface DriverRow {
   id: number;
@@ -109,6 +114,7 @@ interface DriverRow {
   status: string;
   username: string;
   password_hash: string;
+  area: string;
 }
 interface AdminRow {
   id: number;
@@ -127,10 +133,12 @@ interface OrderRow {
   created_at: string;
   customer_line_id: string | null;
   total_money_json: string | null;
+  area: string | null;
+  completed_at: string | null;
 }
 
-const rowToStore = (r: StoreRow): Store => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, commissionRate: r.commission_rate });
-const rowToDriver = (r: DriverRow): Driver => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, status: r.status as 'IDLE' | 'BUSY' });
+const rowToStore = (r: StoreRow): Store => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, commissionRate: r.commission_rate, area: r.area });
+const rowToDriver = (r: DriverRow): Driver => ({ id: r.id, name: r.name, lineUserId: r.line_user_id, status: r.status as 'IDLE' | 'BUSY', area: r.area });
 const rowToOrder = (r: OrderRow): Order => ({
   id: r.id,
   squareOrderId: r.square_order_id,
@@ -143,6 +151,8 @@ const rowToOrder = (r: OrderRow): Order => ({
   createdAt: r.created_at,
   customerLineId: r.customer_line_id,
   totalMoney: r.total_money_json ? JSON.parse(r.total_money_json) : null,
+  area: r.area,
+  completedAt: r.completed_at,
 });
 
 function getAllStores(): Store[] {
@@ -155,11 +165,11 @@ function getStoreById(id: number): Store | undefined {
 function getStoreRowByUsername(username: string): StoreRow | undefined {
   return db.prepare('SELECT * FROM stores WHERE username = ?').get(username) as StoreRow | undefined;
 }
-function insertStore(name: string, lineUserId: string, commissionRate: number, username: string, passwordHash: string): Store {
+function insertStore(name: string, lineUserId: string, commissionRate: number, username: string, passwordHash: string, area: string): Store {
   const info = db
-    .prepare('INSERT INTO stores (name, line_user_id, commission_rate, username, password_hash) VALUES (?,?,?,?,?)')
-    .run(name, lineUserId, commissionRate, username, passwordHash);
-  return { id: Number(info.lastInsertRowid), name, lineUserId, commissionRate };
+    .prepare('INSERT INTO stores (name, line_user_id, commission_rate, username, password_hash, area) VALUES (?,?,?,?,?,?)')
+    .run(name, lineUserId, commissionRate, username, passwordHash, area);
+  return { id: Number(info.lastInsertRowid), name, lineUserId, commissionRate, area };
 }
 
 function getAllDrivers(): Driver[] {
@@ -172,11 +182,11 @@ function getDriverById(id: number): Driver | undefined {
 function getDriverRowByUsername(username: string): DriverRow | undefined {
   return db.prepare('SELECT * FROM drivers WHERE username = ?').get(username) as DriverRow | undefined;
 }
-function insertDriver(name: string, lineUserId: string, username: string, passwordHash: string): Driver {
+function insertDriver(name: string, lineUserId: string, username: string, passwordHash: string, area: string): Driver {
   const info = db
-    .prepare("INSERT INTO drivers (name, line_user_id, status, username, password_hash) VALUES (?,?,'IDLE',?,?)")
-    .run(name, lineUserId, username, passwordHash);
-  return { id: Number(info.lastInsertRowid), name, lineUserId, status: 'IDLE' };
+    .prepare("INSERT INTO drivers (name, line_user_id, status, username, password_hash, area) VALUES (?,?,'IDLE',?,?,?)")
+    .run(name, lineUserId, username, passwordHash, area);
+  return { id: Number(info.lastInsertRowid), name, lineUserId, status: 'IDLE', area };
 }
 function updateDriverStatus(id: number, status: 'IDLE' | 'BUSY') {
   db.prepare('UPDATE drivers SET status = ? WHERE id = ?').run(status, id);
@@ -206,11 +216,11 @@ function getOrderById(id: number): Order | undefined {
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined;
   return row ? rowToOrder(row) : undefined;
 }
-function insertOrder(o: Omit<Order, 'id'>): Order {
+function insertOrder(o: Omit<Order, 'id' | 'completedAt'>): Order {
   const info = db
     .prepare(
-      `INSERT INTO orders (square_order_id, items_json, villa_name, room_number, status, store_id, driver_id, created_at, customer_line_id, total_money_json)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO orders (square_order_id, items_json, villa_name, room_number, status, store_id, driver_id, created_at, customer_line_id, total_money_json, area)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       o.squareOrderId,
@@ -222,15 +232,20 @@ function insertOrder(o: Omit<Order, 'id'>): Order {
       o.driverId,
       o.createdAt,
       o.customerLineId,
-      o.totalMoney ? JSON.stringify(o.totalMoney) : null
+      o.totalMoney ? JSON.stringify(o.totalMoney) : null,
+      o.area
     );
-  return { ...o, id: Number(info.lastInsertRowid) };
+  return { ...o, id: Number(info.lastInsertRowid), completedAt: null };
 }
 function updateOrderDispatch(id: number, storeId: number, driverId: number, status: OrderStatus) {
   db.prepare('UPDATE orders SET store_id = ?, driver_id = ?, status = ? WHERE id = ?').run(storeId, driverId, status, id);
 }
 function updateOrderStatus(id: number, status: OrderStatus) {
-  db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id);
+  if (status === 'COMPLETED') {
+    db.prepare('UPDATE orders SET status = ?, completed_at = ? WHERE id = ?').run(status, new Date().toISOString(), id);
+  } else {
+    db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id);
+  }
 }
 
 // ============================================================
@@ -267,12 +282,13 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 // 加盟店・ドライバー管理API（登録はADMINのみ）
 // ============================================================
 app.post('/api/stores', requireAuth('ADMIN'), (req: Request, res: Response) => {
-  const { name, lineUserId, commissionRate, username, password } = req.body as {
+  const { name, lineUserId, commissionRate, username, password, area } = req.body as {
     name?: string;
     lineUserId?: string;
     commissionRate?: number;
     username?: string;
     password?: string;
+    area?: string;
   };
   if (!name || !lineUserId || !username || !password) {
     return res.status(400).json({ ok: false, error: 'name, lineUserId, username, password は必須です' });
@@ -282,7 +298,7 @@ app.post('/api/stores', requireAuth('ADMIN'), (req: Request, res: Response) => {
   }
   const rate =
     typeof commissionRate === 'number' && commissionRate >= 0 && commissionRate <= 1 ? commissionRate : DEFAULT_COMMISSION_RATE;
-  const store = insertStore(name, lineUserId, rate, username, hashPassword(password));
+  const store = insertStore(name, lineUserId, rate, username, hashPassword(password), area || '恩納村');
   res.status(201).json({ ok: true, store });
 });
 
@@ -291,14 +307,20 @@ app.get('/api/stores', requireAuth('ADMIN'), (_req: Request, res: Response) => {
 });
 
 app.post('/api/drivers', requireAuth('ADMIN'), (req: Request, res: Response) => {
-  const { name, lineUserId, username, password } = req.body as { name?: string; lineUserId?: string; username?: string; password?: string };
+  const { name, lineUserId, username, password, area } = req.body as {
+    name?: string;
+    lineUserId?: string;
+    username?: string;
+    password?: string;
+    area?: string;
+  };
   if (!name || !lineUserId || !username || !password) {
     return res.status(400).json({ ok: false, error: 'name, lineUserId, username, password は必須です' });
   }
   if (getDriverRowByUsername(username)) {
     return res.status(409).json({ ok: false, error: 'そのユーザー名は既に使用されています' });
   }
-  const driver = insertDriver(name, lineUserId, username, hashPassword(password));
+  const driver = insertDriver(name, lineUserId, username, hashPassword(password), area || '恩納村');
   res.status(201).json({ ok: true, driver });
 });
 
@@ -328,7 +350,7 @@ function parseDeliveryInfo(note: string | undefined | null) {
 // Webhookペイロード（Squareから届く生JSON。snake_caseの想定）から
 // 商品一覧・ノートを抽出するフォールバック処理（Square Orders APIが未接続、
 // または取得に失敗した場合に使用）
-function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: string; totalMoney: Money | null } {
+function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: string; totalMoney: Money | null; area: string | null } {
   const items: OrderItem[] = (rawOrder.line_items || []).map((li: any) => ({
     name: li.name || '(商品名不明)',
     quantity: String(li.quantity || '1'),
@@ -346,7 +368,10 @@ function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: strin
     rawOrder.total_money && typeof rawOrder.total_money.amount === 'number'
       ? { amount: rawOrder.total_money.amount, currency: rawOrder.total_money.currency || 'JPY' }
       : null;
-  return { items, note, totalMoney };
+  // area も実際のSquare Webhookには存在しないフィールド。ORDフロント(index.html)が
+  // ホテルデータの area（恩納村/読谷村/名護市/北谷町）を連携送信時に付与する（自動配車の距離代替指標）。
+  const area: string | null = typeof rawOrder.area === 'string' ? rawOrder.area : null;
+  return { items, note, totalMoney, area };
 }
 
 // ============================================================
@@ -416,6 +441,7 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
     // (index.html)からの連携送信時のみ、お客様がLINE通知を希望した場合に付与される。
     customerLineId: typeof rawOrder.customer_line_id === 'string' ? rawOrder.customer_line_id : null,
     totalMoney,
+    area: fallback.area,
   });
   console.log('[Square Webhook受信]', JSON.stringify(order, null, 2));
   res.status(200).json({ ok: true, orderId: order.id });
@@ -533,6 +559,102 @@ app.get('/api/revenue-simulator', requireAuth('ADMIN'), (req: Request, res: Resp
 });
 
 // ============================================================
+// 自動配車：距離（エリア一致）・待機中ドライバー・現在の配達件数を考慮した候補表示
+// 【注意】実際のGPS/地図連携（Phase2）が入るまでの簡易代替指標として、ドライバー・
+// 注文それぞれの「主な稼働/お届け先エリア」の一致有無を距離の代替に使っている。
+// ============================================================
+interface DispatchCandidate {
+  driver: Driver;
+  activeDeliveryCount: number;
+  sameArea: boolean;
+  reason: string;
+}
+function rankDriverCandidates(order: Order): DispatchCandidate[] {
+  const allOrders = getAllOrders();
+  const candidates: DispatchCandidate[] = getAllDrivers().map(driver => {
+    const activeDeliveryCount = allOrders.filter(o => o.driverId === driver.id && o.status !== 'COMPLETED').length;
+    const sameArea = order.area != null && driver.area === order.area;
+    const reason = [
+      driver.status === 'IDLE' ? '待機中' : '配達中',
+      sameArea ? `${driver.area}エリア一致` : `${driver.area}エリア`,
+      `現在の配達件数${activeDeliveryCount}件`,
+    ].join('・');
+    return { driver, activeDeliveryCount, sameArea, reason };
+  });
+  candidates.sort((a, b) => {
+    if ((a.driver.status === 'IDLE') !== (b.driver.status === 'IDLE')) return a.driver.status === 'IDLE' ? -1 : 1;
+    if (a.sameArea !== b.sameArea) return a.sameArea ? -1 : 1;
+    return a.activeDeliveryCount - b.activeDeliveryCount;
+  });
+  return candidates;
+}
+
+app.get('/api/orders/:id/dispatch-candidates', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const order = getOrderById(Number(req.params.id));
+  if (!order) return res.status(404).json({ ok: false, error: '注文が見つかりません' });
+  const ranked = rankDriverCandidates(order).map(c => ({
+    driverId: c.driver.id,
+    name: c.driver.name,
+    status: c.driver.status,
+    area: c.driver.area,
+    activeDeliveryCount: c.activeDeliveryCount,
+    sameArea: c.sameArea,
+    reason: c.reason,
+  }));
+  res.json({ ok: true, orderId: order.id, orderArea: order.area, candidates: ranked });
+});
+
+// ============================================================
+// KPIダッシュボード：本日注文数・本日売上・平均配達時間・加盟店ランキング・ドライバー稼働率
+// ============================================================
+function isToday(iso: string): boolean {
+  const d = new Date(iso);
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+}
+function kpiDashboard() {
+  const allOrders = getAllOrders();
+  const todayOrders = allOrders.filter(o => isToday(o.createdAt));
+  const todayOrderCount = todayOrders.length;
+  const todayRevenue = todayOrders.filter(o => o.totalMoney).reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
+
+  const completedWithTimes = allOrders.filter(o => o.status === 'COMPLETED' && o.completedAt);
+  const avgDeliveryMinutes = completedWithTimes.length
+    ? Math.round(
+        completedWithTimes.reduce((sum, o) => sum + (new Date(o.completedAt!).getTime() - new Date(o.createdAt).getTime()) / 60000, 0) /
+          completedWithTimes.length
+      )
+    : null;
+
+  const storeRanking = getAllStores()
+    .map(s => {
+      const completed = allOrders.filter(o => o.storeId === s.id && o.status === 'COMPLETED' && o.totalMoney);
+      const revenue = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
+      return { storeId: s.id, name: s.name, orderCount: completed.length, revenue };
+    })
+    .sort((a, b) => b.revenue - a.revenue);
+
+  const drivers = getAllDrivers();
+  const busyCount = drivers.filter(d => d.status === 'BUSY').length;
+  const driverUtilizationRate = drivers.length ? Math.round((busyCount / drivers.length) * 100) : 0;
+
+  return {
+    todayOrderCount,
+    todayRevenue,
+    avgDeliveryMinutes,
+    storeRanking,
+    driverUtilizationRate,
+    busyDriverCount: busyCount,
+    totalDriverCount: drivers.length,
+    currency: 'JPY',
+  };
+}
+
+app.get('/api/kpi', requireAuth('ADMIN'), (_req: Request, res: Response) => {
+  res.json({ ok: true, ...kpiDashboard() });
+});
+
+// ============================================================
 // 管理画面（ログイン必須。Cookie(ord_admin_session)にJWTを保持する）
 // ============================================================
 function renderAdminLoginHtml(error?: string): string {
@@ -593,6 +715,16 @@ function renderAdminHtml(): string {
     stores.map(s => `<option value="${s.id}" ${s.id === selected ? 'selected' : ''}>${s.name}</option>`).join('');
   const driverOptions = (selected: number | null) =>
     drivers.map(d => `<option value="${d.id}" ${d.id === selected ? 'selected' : ''}>${d.name}（${d.status}）</option>`).join('');
+  // 未手配の注文は自動配車の候補ランキング順にドライバー選択肢を並べる（①待機中優先 ②エリア一致優先 ③配達件数が少ない順）
+  const driverSelectForOrder = (order: Order) => {
+    if (order.status !== 'RECEIVED') return `<select id="driver-${order.id}">${driverOptions(order.driverId)}</select>`;
+    const ranked = rankDriverCandidates(order);
+    if (ranked.length === 0) return `<select id="driver-${order.id}"><option value="">(配送パートナー未登録)</option></select>`;
+    const opts = ranked
+      .map((c, i) => `<option value="${c.driver.id}" ${i === 0 ? 'selected' : ''}>${i + 1}位: ${c.driver.name}（${c.reason}）</option>`)
+      .join('');
+    return `<select id="driver-${order.id}">${opts}</select>`;
+  };
 
   const yen = (n: number) => `¥${n.toLocaleString('ja-JP')}`;
   const rows = orders
@@ -601,17 +733,22 @@ function renderAdminHtml(): string {
     <tr>
       <td>${o.id}</td>
       <td>${o.squareOrderId}</td>
-      <td>${o.villaName} / ${o.roomNumber}</td>
+      <td>${o.villaName} / ${o.roomNumber}${o.area ? `（${o.area}）` : ''}</td>
       <td>${o.items.map(i => `${i.name}×${i.quantity}`).join('<br>') || '(商品情報なし)'}</td>
       <td>${o.totalMoney ? yen(o.totalMoney.amount) : '(金額情報なし)'}</td>
       <td>${o.status}</td>
       <td>
         <select id="store-${o.id}">${storeOptions(o.storeId)}</select>
-        <select id="driver-${o.id}">${driverOptions(o.driverId)}</select>
+        ${driverSelectForOrder(o)}
       </td>
       <td>${o.status === 'RECEIVED' ? `<button onclick="dispatchOrder(${o.id})">手配開始</button>` : '手配済み'}</td>
     </tr>`
     )
+    .join('');
+
+  const kpi = kpiDashboard();
+  const storeRankingRows = kpi.storeRanking
+    .map((s, i) => `<li>${i + 1}位: ${s.name}　${s.orderCount}件　${yen(s.revenue)}</li>`)
     .join('');
 
   const rev = revenueSummary();
@@ -644,6 +781,15 @@ input{padding:6px;font-size:12.5px;margin-right:6px;}
 LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}</span></p>
 
 <fieldset>
+  <legend>本日のKPI</legend>
+  <p>本日注文数: <b>${kpi.todayOrderCount}</b>件　本日売上: <b>${yen(kpi.todayRevenue)}</b></p>
+  <p>平均配達時間（全期間・完了注文ベース）: <b>${kpi.avgDeliveryMinutes != null ? kpi.avgDeliveryMinutes + '分' : '(データなし)'}</b></p>
+  <p>ドライバー稼働率: <b>${kpi.driverUtilizationRate}%</b>（稼働中${kpi.busyDriverCount}/${kpi.totalDriverCount}名）</p>
+  <p>加盟店ランキング（全期間売上順）:</p>
+  <ul>${storeRankingRows || '<li>(データなし)</li>'}</ul>
+</fieldset>
+
+<fieldset>
   <legend>経営サマリー（完了注文ベース・概算）</legend>
   <p>完了注文数: <b>${rev.completedOrderCount}</b>件　総売上(GMV): <b>${yen(rev.grossAmount)}</b></p>
   <p>ORD手数料収益: <b>${yen(rev.commissionAmount)}</b>　配送パートナー報酬支払: <b>${yen(rev.driverPayoutTotal)}</b></p>
@@ -655,10 +801,11 @@ LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（�
   <input id="store-name" placeholder="店舗名">
   <input id="store-line" placeholder="LINE User ID">
   <input id="store-commission" placeholder="手数料率(%) 例:15" style="width:110px;">
+  <input id="store-area" placeholder="主なエリア 例:恩納村" style="width:130px;">
   <input id="store-username" placeholder="ログインID">
   <input id="store-password" type="password" placeholder="パスワード">
   <button onclick="createStore()">登録</button>
-  <p>登録済み: ${stores.map(s => s.name).join('、') || '(なし)'}</p>
+  <p>登録済み: ${stores.map(s => `${s.name}(${s.area})`).join('、') || '(なし)'}</p>
   <ul>${storeSettlementRows || '<li>(なし)</li>'}</ul>
 </fieldset>
 
@@ -666,10 +813,11 @@ LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（�
   <legend>配送パートナー 登録</legend>
   <input id="driver-name" placeholder="ドライバー名">
   <input id="driver-line" placeholder="LINE User ID">
+  <input id="driver-area" placeholder="主な稼働エリア 例:恩納村" style="width:150px;">
   <input id="driver-username" placeholder="ログインID">
   <input id="driver-password" type="password" placeholder="パスワード">
   <button onclick="createDriver()">登録</button>
-  <p>登録済み: ${drivers.map(d => `${d.name}(${d.status})`).join('、') || '(なし)'}</p>
+  <p>登録済み: ${drivers.map(d => `${d.name}(${d.status}・${d.area})`).join('、') || '(なし)'}</p>
   <ul>${driverSettlementRows || '<li>(なし)</li>'}</ul>
 </fieldset>
 
@@ -695,9 +843,10 @@ async function createStore(){
   const lineUserId = document.getElementById('store-line').value;
   const commissionPercent = document.getElementById('store-commission').value;
   const commissionRate = commissionPercent ? Number(commissionPercent)/100 : undefined;
+  const area = document.getElementById('store-area').value;
   const username = document.getElementById('store-username').value;
   const password = document.getElementById('store-password').value;
-  const res = await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, commissionRate, username, password})});
+  const res = await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, commissionRate, area, username, password})});
   const d = await res.json();
   if(!d.ok){ alert('エラー: '+d.error); return; }
   location.reload();
@@ -735,9 +884,10 @@ async function runSimulator(){
 async function createDriver(){
   const name = document.getElementById('driver-name').value;
   const lineUserId = document.getElementById('driver-line').value;
+  const area = document.getElementById('driver-area').value;
   const username = document.getElementById('driver-username').value;
   const password = document.getElementById('driver-password').value;
-  const res = await fetch('/api/drivers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, username, password})});
+  const res = await fetch('/api/drivers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, area, username, password})});
   const d = await res.json();
   if(!d.ok){ alert('エラー: '+d.error); return; }
   location.reload();

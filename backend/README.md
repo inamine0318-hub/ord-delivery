@@ -52,6 +52,12 @@ curl -X POST http://localhost:3001/api/auth/login \
   ステータスを `PREPARING → READY_FOR_PICKUP → DELIVERING → COMPLETED` と更新（認証不要でLINEから直接呼ばれる想定）
 - `GET /api/stores/:id/settlement`, `GET /api/drivers/:id/settlement` — 精算情報（ADMIN、または本人のみ）
 - `GET /api/revenue/summary`, `GET /api/revenue-simulator` — 経営サマリー・収益シミュレーター（ADMIN限定）
+- `GET /api/orders/:id/dispatch-candidates` — 自動配車の候補ランキング（ADMIN限定）。①待機中ドライバー優先
+  ②お届け先エリアと一致するドライバー優先 ③現在の配達件数が少ない順、で並べ替える。実際のGPS/地図連携（Phase2）
+  が入るまでは、店舗・ドライバー・注文それぞれの「主なエリア」の一致有無を距離の代替指標として使用している。
+  `/admin`画面の未手配注文の配送パートナー選択肢にもこの順で自動反映される
+- `GET /api/kpi` — KPIダッシュボード（ADMIN限定）: 本日注文数・本日売上・平均配達時間（全期間の完了注文ベース）・
+  加盟店ランキング（全期間売上順）・ドライバー稼働率
 
 ## セットアップ
 

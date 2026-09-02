@@ -20,7 +20,8 @@ db.exec(`
     line_user_id TEXT NOT NULL,
     commission_rate REAL NOT NULL DEFAULT 0.15,
     username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL
+    password_hash TEXT NOT NULL,
+    area TEXT NOT NULL DEFAULT '恩納村'
   );
 
   CREATE TABLE IF NOT EXISTS drivers (
@@ -29,7 +30,8 @@ db.exec(`
     line_user_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'IDLE',
     username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL
+    password_hash TEXT NOT NULL,
+    area TEXT NOT NULL DEFAULT '恩納村'
   );
 
   CREATE TABLE IF NOT EXISTS admins (
@@ -49,6 +51,20 @@ db.exec(`
     driver_id INTEGER,
     created_at TEXT NOT NULL,
     customer_line_id TEXT,
-    total_money_json TEXT
+    total_money_json TEXT,
+    area TEXT,
+    completed_at TEXT
   );
 `);
+
+// 既存DBに新しいカラムを安全に追加する簡易マイグレーション（テーブルごと作り直さない）
+function ensureColumn(table: string, column: string, definition: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('stores', 'area', "TEXT NOT NULL DEFAULT '恩納村'");
+ensureColumn('drivers', 'area', "TEXT NOT NULL DEFAULT '恩納村'");
+ensureColumn('orders', 'area', 'TEXT');
+ensureColumn('orders', 'completed_at', 'TEXT');
