@@ -71,6 +71,7 @@ interface Order {
   storeId: number | null;
   driverId: number | null;
   createdAt: string;
+  customerLineId: string | null; // お客様がLINE通知を希望した場合のLINE User ID（任意）
 }
 
 const stores: Store[] = [];
@@ -207,6 +208,9 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
     storeId: null,
     driverId: null,
     createdAt: new Date().toISOString(),
+    // customer_line_id は実際のSquare Webhookには存在しないフィールド。ORDフロント
+    // (index.html)からの連携送信時のみ、お客様がLINE通知を希望した場合に付与される。
+    customerLineId: typeof rawOrder.customer_line_id === 'string' ? rawOrder.customer_line_id : null,
   };
   orders.push(order);
   console.log('[Square Webhook受信]', JSON.stringify(order, null, 2));
@@ -416,6 +420,50 @@ function buildDriverFlex(order: Order): messagingApi.FlexMessage {
   };
 }
 
+function buildCustomerFlex(order: Order, status: 'PREPARING' | 'COMPLETED'): messagingApi.FlexMessage {
+  const isPreparing = status === 'PREPARING';
+  return {
+    type: 'flex',
+    altText: isPreparing ? '【ORD】ご注文を受け付けました' : '【ORD】お届け完了しました',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#14181C',
+        paddingAll: '12px',
+        contents: [
+          {
+            type: 'text',
+            text: isPreparing ? '【ORD】ご注文を受け付けました' : '【ORD】お届けが完了しました',
+            weight: 'bold',
+            size: 'md',
+            color: '#ffffff',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: `お届け先: ${order.villaName}`, wrap: true, weight: 'bold' },
+          { type: 'text', text: `部屋番号: ${order.roomNumber}`, wrap: true },
+          {
+            type: 'text',
+            text: isPreparing ? 'ただいま加盟店様にて調理を開始しました。しばらくお待ちください。' : 'ご注文の品をお届けしました。ご利用ありがとうございました。',
+            wrap: true,
+            size: 'sm',
+            color: '#666666',
+          },
+          { type: 'text', text: `注文ID: ${order.squareOrderId}`, size: 'xs', color: '#888888' },
+        ],
+      },
+    },
+  };
+}
+
 async function pushLine(to: string, message: messagingApi.FlexMessage): Promise<void> {
   if (!lineConfigured || !lineClient) {
     console.log('----- [LINE送信モック（LINE_CHANNEL_ACCESS_TOKEN未設定）] -----');
@@ -449,6 +497,9 @@ app.post('/api/orders/:id/dispatch', async (req: Request, res: Response) => {
     await pushLine(driver.lineUserId, buildDriverFlex(order));
     order.status = 'PREPARING';
     driver.status = 'BUSY';
+    if (order.customerLineId) {
+      await pushLine(order.customerLineId, buildCustomerFlex(order, 'PREPARING'));
+    }
     res.json({ ok: true, order });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
@@ -493,6 +544,11 @@ app.post('/webhooks/line', (req: Request, res: Response) => {
           if (order.driverId) {
             const driver = drivers.find(d => d.id === order.driverId);
             if (driver) driver.status = 'IDLE';
+          }
+          if (order.customerLineId) {
+            pushLine(order.customerLineId, buildCustomerFlex(order, 'COMPLETED')).catch(e =>
+              console.error('[お客様LINE通知エラー]', e)
+            );
           }
           break;
         default:
