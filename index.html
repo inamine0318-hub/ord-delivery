@@ -709,6 +709,7 @@ function syncOrderToBackend(order){
             modifiers: [],
           })),
           customer_line_id: state.customerLineId || null,
+          total_money: { amount: order.total + 300, currency: 'JPY' },
         },
       },
     },

@@ -49,6 +49,7 @@ interface Store {
   id: number;
   name: string;
   lineUserId: string;
+  commissionRate: number; // ORDが徴収する手数料率（0〜1、例:0.15 = 15%）
 }
 interface Driver {
   id: number;
@@ -61,6 +62,10 @@ interface OrderItem {
   quantity: string;
   note?: string;
 }
+interface Money {
+  amount: number; // 通貨の最小単位（JPYは1円単位、小数を持たない）
+  currency: string;
+}
 interface Order {
   id: number;
   squareOrderId: string;
@@ -72,7 +77,14 @@ interface Order {
   driverId: number | null;
   createdAt: string;
   customerLineId: string | null; // お客様がLINE通知を希望した場合のLINE User ID（任意）
+  totalMoney: Money | null; // 注文金額（Square Orders APIから取得、または連携元ペイロードのtotal_moneyで代替）
 }
+
+// 加盟店ごとのcommissionRateが未設定/不正な場合に使うデフォルト手数料率。
+// 実際の料率は事業判断（社長決裁）で確定させる前提の暫定値。
+const DEFAULT_COMMISSION_RATE = 0.15;
+// 配送パートナーへの1件あたり報酬（固定報酬モデルの簡易版。距離連動制等は将来拡張）
+const DRIVER_PAYOUT_PER_DELIVERY = 400;
 
 const stores: Store[] = [];
 const drivers: Driver[] = [];
@@ -85,11 +97,13 @@ let nextOrderId = 1;
 // 加盟店・ドライバー管理API
 // ============================================================
 app.post('/api/stores', (req: Request, res: Response) => {
-  const { name, lineUserId } = req.body as { name?: string; lineUserId?: string };
+  const { name, lineUserId, commissionRate } = req.body as { name?: string; lineUserId?: string; commissionRate?: number };
   if (!name || !lineUserId) {
     return res.status(400).json({ ok: false, error: 'name と lineUserId は必須です' });
   }
-  const store: Store = { id: nextStoreId++, name, lineUserId };
+  const rate =
+    typeof commissionRate === 'number' && commissionRate >= 0 && commissionRate <= 1 ? commissionRate : DEFAULT_COMMISSION_RATE;
+  const store: Store = { id: nextStoreId++, name, lineUserId, commissionRate: rate };
   stores.push(store);
   res.status(201).json({ ok: true, store });
 });
@@ -134,7 +148,7 @@ function parseDeliveryInfo(note: string | undefined | null) {
 // Webhookペイロード（Squareから届く生JSON。snake_caseの想定）から
 // 商品一覧・ノートを抽出するフォールバック処理（Square Orders APIが未接続、
 // または取得に失敗した場合に使用）
-function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: string } {
+function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: string; totalMoney: Money | null } {
   const items: OrderItem[] = (rawOrder.line_items || []).map((li: any) => ({
     name: li.name || '(商品名不明)',
     quantity: String(li.quantity || '1'),
@@ -145,7 +159,14 @@ function extractFromRawPayload(rawOrder: any): { items: OrderItem[]; note: strin
     rawOrder.fulfillments?.[0]?.pickup_details?.note ||
     rawOrder.fulfillments?.[0]?.delivery_details?.note ||
     '';
-  return { items, note };
+  // total_money は実際のSquare Webhookペイロードにも存在する形式（snake_case、amountは
+  // JPYのように小数点を持たない通貨ではそのまま円額）。ORDフロント(index.html)がSquare未接続の
+  // 開発中に送るモックpayloadでも同じ形式を使っているため、フォールバックとして共通利用できる。
+  const totalMoney: Money | null =
+    rawOrder.total_money && typeof rawOrder.total_money.amount === 'number'
+      ? { amount: rawOrder.total_money.amount, currency: rawOrder.total_money.currency || 'JPY' }
+      : null;
+  return { items, note, totalMoney };
 }
 
 // ============================================================
@@ -167,6 +188,7 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
   const squareOrderId: string = rawOrder.id || `mock-${Date.now()}`;
   let items: OrderItem[] = [];
   let note = '';
+  let totalMoney: Money | null = null;
 
   // Square Orders APIで詳細取得（実接続時のみ）。取得できなければWebhookペイロードで代替する。
   if (squareConfigured && squareClient && rawOrder.id) {
@@ -184,17 +206,20 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
           fulfillment?.deliveryDetails?.note ||
           fulfillment?.pickupDetails?.note ||
           '';
+        // Money.amount は bigint 型のため、JSONで安全に扱えるnumberへ変換する
+        if (order.totalMoney?.amount != null) {
+          totalMoney = { amount: Number(order.totalMoney.amount), currency: order.totalMoney.currency || 'JPY' };
+        }
       }
     } catch (e) {
       console.error('[Square Orders API] 取得に失敗、Webhookペイロードのデータで代替します:', e);
     }
   }
 
-  if (items.length === 0) {
-    const fallback = extractFromRawPayload(rawOrder);
-    items = fallback.items;
-    note = note || fallback.note;
-  }
+  const fallback = extractFromRawPayload(rawOrder);
+  if (items.length === 0) items = fallback.items;
+  note = note || fallback.note;
+  totalMoney = totalMoney || fallback.totalMoney;
 
   const delivery = parseDeliveryInfo(note);
 
@@ -211,6 +236,7 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
     // customer_line_id は実際のSquare Webhookには存在しないフィールド。ORDフロント
     // (index.html)からの連携送信時のみ、お客様がLINE通知を希望した場合に付与される。
     customerLineId: typeof rawOrder.customer_line_id === 'string' ? rawOrder.customer_line_id : null,
+    totalMoney,
   };
   orders.push(order);
   console.log('[Square Webhook受信]', JSON.stringify(order, null, 2));
@@ -219,6 +245,106 @@ app.post('/webhooks/square', async (req: Request, res: Response) => {
 
 app.get('/api/orders', (_req: Request, res: Response) => {
   res.json(orders);
+});
+
+// ============================================================
+// 収益化：手数料精算・配送パートナー報酬・経営サマリー・収益シミュレーター
+// 【注意】あくまで概算計算です。実際の入出金・請求書発行・税務処理は別途必要です。
+// ============================================================
+function commissionRateForStore(storeId: number | null): number {
+  const store = stores.find(s => s.id === storeId);
+  return store ? store.commissionRate : DEFAULT_COMMISSION_RATE;
+}
+
+// 加盟店の精算（完了注文の売上合計・ORD手数料・加盟店への支払額）
+app.get('/api/stores/:id/settlement', (req: Request, res: Response) => {
+  const storeId = Number(req.params.id);
+  const store = stores.find(s => s.id === storeId);
+  if (!store) return res.status(404).json({ ok: false, error: '加盟店が見つかりません' });
+
+  const completed = orders.filter(o => o.storeId === storeId && o.status === 'COMPLETED' && o.totalMoney);
+  const grossAmount = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
+  const commissionAmount = Math.round(grossAmount * store.commissionRate);
+  const netPayout = grossAmount - commissionAmount;
+
+  res.json({
+    ok: true,
+    storeId,
+    storeName: store.name,
+    commissionRate: store.commissionRate,
+    orderCount: completed.length,
+    grossAmount,
+    commissionAmount,
+    netPayout,
+    currency: 'JPY',
+  });
+});
+
+// 配送パートナーの精算（完了配達件数×固定報酬）
+app.get('/api/drivers/:id/settlement', (req: Request, res: Response) => {
+  const driverId = Number(req.params.id);
+  const driver = drivers.find(d => d.id === driverId);
+  if (!driver) return res.status(404).json({ ok: false, error: 'ドライバーが見つかりません' });
+
+  const deliveryCount = orders.filter(o => o.driverId === driverId && o.status === 'COMPLETED').length;
+  const payoutAmount = deliveryCount * DRIVER_PAYOUT_PER_DELIVERY;
+
+  res.json({
+    ok: true,
+    driverId,
+    driverName: driver.name,
+    deliveryCount,
+    payoutPerDelivery: DRIVER_PAYOUT_PER_DELIVERY,
+    payoutAmount,
+    currency: 'JPY',
+  });
+});
+
+// 経営サマリー（全加盟店・全ドライバー合算のORD粗利）
+function revenueSummary() {
+  const completed = orders.filter(o => o.status === 'COMPLETED' && o.totalMoney);
+  const grossAmount = completed.reduce((sum, o) => sum + (o.totalMoney?.amount || 0), 0);
+  const commissionAmount = completed.reduce(
+    (sum, o) => sum + Math.round((o.totalMoney?.amount || 0) * commissionRateForStore(o.storeId)),
+    0
+  );
+  const deliveryCount = orders.filter(o => o.status === 'COMPLETED' && o.driverId).length;
+  const driverPayoutTotal = deliveryCount * DRIVER_PAYOUT_PER_DELIVERY;
+  const ordGrossProfit = commissionAmount - driverPayoutTotal;
+  return { completedOrderCount: completed.length, grossAmount, commissionAmount, driverPayoutTotal, ordGrossProfit, currency: 'JPY' };
+}
+
+app.get('/api/revenue/summary', (_req: Request, res: Response) => {
+  res.json({ ok: true, ...revenueSummary() });
+});
+
+// 収益シミュレーター（実データ不要。想定値から月商・ORD粗利を試算する）
+app.get('/api/revenue-simulator', (req: Request, res: Response) => {
+  const q = req.query as Record<string, string>;
+  const dailyOrders = Number(q.dailyOrders) || 20;
+  const avgOrderValue = Number(q.avgOrderValue) || 2500;
+  const commissionRate = q.commissionRate !== undefined && q.commissionRate !== '' ? Number(q.commissionRate) : DEFAULT_COMMISSION_RATE;
+  const days = Number(q.days) || 30;
+  const driverPayoutPerDelivery =
+    q.driverPayoutPerDelivery !== undefined && q.driverPayoutPerDelivery !== '' ? Number(q.driverPayoutPerDelivery) : DRIVER_PAYOUT_PER_DELIVERY;
+
+  const totalOrders = dailyOrders * days;
+  const grossGmv = totalOrders * avgOrderValue;
+  const ordCommissionRevenue = Math.round(grossGmv * commissionRate);
+  const driverPayoutTotal = totalOrders * driverPayoutPerDelivery;
+  const ordGrossProfit = ordCommissionRevenue - driverPayoutTotal;
+
+  res.json({
+    ok: true,
+    assumptions: { dailyOrders, avgOrderValue, commissionRate, days, driverPayoutPerDelivery },
+    totalOrders,
+    grossGmv,
+    ordCommissionRevenue,
+    driverPayoutTotal,
+    ordGrossProfit,
+    ordGrossProfitPerDay: Math.round(ordGrossProfit / days),
+    currency: 'JPY',
+  });
 });
 
 // ---------- 簡易管理画面 ----------
@@ -232,6 +358,7 @@ function renderAdminHtml(): string {
   const driverOptions = (selected: number | null) =>
     drivers.map(d => `<option value="${d.id}" ${d.id === selected ? 'selected' : ''}>${d.name}（${d.status}）</option>`).join('');
 
+  const yen = (n: number) => `¥${n.toLocaleString('ja-JP')}`;
   const rows = orders
     .map(
       o => `
@@ -240,6 +367,7 @@ function renderAdminHtml(): string {
       <td>${o.squareOrderId}</td>
       <td>${o.villaName} / ${o.roomNumber}</td>
       <td>${o.items.map(i => `${i.name}×${i.quantity}`).join('<br>') || '(商品情報なし)'}</td>
+      <td>${o.totalMoney ? yen(o.totalMoney.amount) : '(金額情報なし)'}</td>
       <td>${o.status}</td>
       <td>
         <select id="store-${o.id}">${storeOptions(o.storeId)}</select>
@@ -248,6 +376,14 @@ function renderAdminHtml(): string {
       <td>${o.status === 'RECEIVED' ? `<button onclick="dispatchOrder(${o.id})">手配開始</button>` : '手配済み'}</td>
     </tr>`
     )
+    .join('');
+
+  const rev = revenueSummary();
+  const storeSettlementRows = stores
+    .map(s => `<li>${s.name}（手数料率${Math.round(s.commissionRate * 100)}%） <button onclick="viewStoreSettlement(${s.id})">精算を見る</button></li>`)
+    .join('');
+  const driverSettlementRows = drivers
+    .map(d => `<li>${d.name} <button onclick="viewDriverSettlement(${d.id})">精算を見る</button></li>`)
     .join('');
 
   return `<!DOCTYPE html>
@@ -270,11 +406,20 @@ input{padding:6px;font-size:12.5px;margin-right:6px;}
 LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}</span></p>
 
 <fieldset>
+  <legend>経営サマリー（完了注文ベース・概算）</legend>
+  <p>完了注文数: <b>${rev.completedOrderCount}</b>件　総売上(GMV): <b>${yen(rev.grossAmount)}</b></p>
+  <p>ORD手数料収益: <b>${yen(rev.commissionAmount)}</b>　配送パートナー報酬支払: <b>${yen(rev.driverPayoutTotal)}</b></p>
+  <p>ORD粗利（手数料収益－配送報酬）: <b style="color:#0086A8;">${yen(rev.ordGrossProfit)}</b></p>
+</fieldset>
+
+<fieldset>
   <legend>加盟店 登録</legend>
   <input id="store-name" placeholder="店舗名">
   <input id="store-line" placeholder="LINE User ID">
+  <input id="store-commission" placeholder="手数料率(%) 例:15" style="width:110px;">
   <button onclick="createStore()">登録</button>
   <p>登録済み: ${stores.map(s => s.name).join('、') || '(なし)'}</p>
+  <ul>${storeSettlementRows || '<li>(なし)</li>'}</ul>
 </fieldset>
 
 <fieldset>
@@ -283,19 +428,62 @@ LINE連携: <span class="badge">${lineConfigured ? '実送信' : '未設定（�
   <input id="driver-line" placeholder="LINE User ID">
   <button onclick="createDriver()">登録</button>
   <p>登録済み: ${drivers.map(d => `${d.name}(${d.status})`).join('、') || '(なし)'}</p>
+  <ul>${driverSettlementRows || '<li>(なし)</li>'}</ul>
+</fieldset>
+
+<fieldset>
+  <legend>収益シミュレーター（実データ不要・想定値から試算）</legend>
+  <input id="sim-dailyOrders" placeholder="1日あたり注文数" value="20" style="width:150px;">
+  <input id="sim-avgOrderValue" placeholder="客単価(円)" value="2500" style="width:120px;">
+  <input id="sim-commissionRate" placeholder="手数料率(%)" value="15" style="width:110px;">
+  <input id="sim-days" placeholder="日数" value="30" style="width:80px;">
+  <input id="sim-driverPayout" placeholder="配送報酬/件(円)" value="400" style="width:130px;">
+  <button onclick="runSimulator()">試算する</button>
+  <p id="sim-result" style="white-space:pre-wrap;"></p>
 </fieldset>
 
 <table>
-<tr><th>ID</th><th>Square注文ID</th><th>お届け先</th><th>商品</th><th>状態</th><th>加盟店/ドライバー割当</th><th>操作</th></tr>
-${rows || '<tr><td colspan="7">注文はまだありません（README.mdのcurlコマンドでテスト送信できます）</td></tr>'}
+<tr><th>ID</th><th>Square注文ID</th><th>お届け先</th><th>商品</th><th>金額</th><th>状態</th><th>加盟店/ドライバー割当</th><th>操作</th></tr>
+${rows || '<tr><td colspan="8">注文はまだありません（README.mdのcurlコマンドでテスト送信できます）</td></tr>'}
 </table>
 
 <script>
 async function createStore(){
   const name = document.getElementById('store-name').value;
   const lineUserId = document.getElementById('store-line').value;
-  await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId})});
+  const commissionPercent = document.getElementById('store-commission').value;
+  const commissionRate = commissionPercent ? Number(commissionPercent)/100 : undefined;
+  await fetch('/api/stores', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, lineUserId, commissionRate})});
   location.reload();
+}
+async function viewStoreSettlement(id){
+  const res = await fetch('/api/stores/'+id+'/settlement');
+  const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
+  alert(d.storeName+' の精算\\n完了注文数: '+d.orderCount+'件\\n売上合計: ¥'+d.grossAmount.toLocaleString()+'\\nORD手数料('+Math.round(d.commissionRate*100)+'%): ¥'+d.commissionAmount.toLocaleString()+'\\n加盟店お支払額: ¥'+d.netPayout.toLocaleString());
+}
+async function viewDriverSettlement(id){
+  const res = await fetch('/api/drivers/'+id+'/settlement');
+  const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
+  alert(d.driverName+' の精算\\n完了配達件数: '+d.deliveryCount+'件\\n報酬単価: ¥'+d.payoutPerDelivery.toLocaleString()+'\\nお支払額: ¥'+d.payoutAmount.toLocaleString());
+}
+async function runSimulator(){
+  const params = new URLSearchParams({
+    dailyOrders: document.getElementById('sim-dailyOrders').value,
+    avgOrderValue: document.getElementById('sim-avgOrderValue').value,
+    commissionRate: String(Number(document.getElementById('sim-commissionRate').value)/100),
+    days: document.getElementById('sim-days').value,
+    driverPayoutPerDelivery: document.getElementById('sim-driverPayout').value,
+  });
+  const res = await fetch('/api/revenue-simulator?'+params.toString());
+  const d = await res.json();
+  document.getElementById('sim-result').textContent =
+    '期間合計注文数: '+d.totalOrders.toLocaleString()+'件\\n'+
+    '総売上(GMV): ¥'+d.grossGmv.toLocaleString()+'\\n'+
+    'ORD手数料収益: ¥'+d.ordCommissionRevenue.toLocaleString()+'\\n'+
+    '配送パートナー報酬支払: ¥'+d.driverPayoutTotal.toLocaleString()+'\\n'+
+    'ORD粗利: ¥'+d.ordGrossProfit.toLocaleString()+'（1日あたり ¥'+d.ordGrossProfitPerDay.toLocaleString()+'）';
 }
 async function createDriver(){
   const name = document.getElementById('driver-name').value;
