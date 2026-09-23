@@ -39,6 +39,9 @@ app.use(cors({ credentials: true, origin: true }));
 // 二重パースは行わない。全ルートに適用されるが、req.bodyの既存挙動には影響しない。
 app.use(express.json({ verify: captureRawBody }));
 app.use(express.urlencoded({ extended: true }));
+// 【2026-09-23・ORDブランドサイト構築】商品写真・加盟店ロゴの静的配信。
+// 加盟店提供の実写真のみを配置する想定（AI生成・推測画像は置かない）。
+app.use('/product-images', express.static(path.join(__dirname, '..', 'public', 'product-images')));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
@@ -2282,6 +2285,132 @@ export function __setCheckoutTestHooks(hooks: CheckoutTestHooks | null): void {
     Object.assign(__checkoutTestHooks, hooks);
   }
 }
+
+// ============================================================
+// 【2026-09-23・ORDブランドサイト構築】お客様向け公開API（認証不要）
+// 【重要】ここで返すフィールドは意図的に絞り込む。merchant_price/container_fee/markup_rate
+// （加盟店の仕入原価・上乗せ率）やcommission_rate/username/password_hash等の内部運用情報は
+// 一切含めない。お客様が見てよい情報のみを返す設計にする。
+// ============================================================
+interface PublicStore {
+  id: number;
+  name: string;
+  catalogStoreId: string | null;
+  logoUrl: string | null;
+  description: string | null;
+  descriptionEn: string | null;
+  tags: string[];
+  genre: string | null;
+  area: string;
+}
+function getPublicStores(): PublicStore[] {
+  const rows = db
+    .prepare(
+      `SELECT id, name, catalog_store_id, logo_url, description, description_en, tags, genre, area
+       FROM stores WHERE active = 1 ORDER BY id`
+    )
+    .all() as {
+    id: number;
+    name: string;
+    catalog_store_id: string | null;
+    logo_url: string | null;
+    description: string | null;
+    description_en: string | null;
+    tags: string | null;
+    genre: string | null;
+    area: string;
+  }[];
+  return rows.map(r => {
+    let tags: string[] = [];
+    if (r.tags) {
+      try {
+        const parsed = JSON.parse(r.tags);
+        if (Array.isArray(parsed)) tags = parsed;
+      } catch {
+        // 不正なJSONが保存されていた場合は空配列のまま返す（推測で補完しない）
+      }
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      catalogStoreId: r.catalog_store_id,
+      logoUrl: r.logo_url,
+      description: r.description,
+      descriptionEn: r.description_en,
+      tags,
+      genre: r.genre,
+      area: r.area,
+    };
+  });
+}
+
+interface PublicProduct {
+  productKey: string;
+  name: string;
+  nameEn: string | null;
+  description: string | null;
+  descriptionEn: string | null;
+  category: string | null;
+  ordPrice: number;
+  imageReference: string | null;
+  gokunNukiAvailable: boolean;
+}
+function getPublicProductsByCatalogStoreId(catalogStoreId: string): PublicProduct[] | undefined {
+  const store = getStoreByCatalogId(catalogStoreId);
+  if (!store || !store.active) return undefined;
+  const rows = db
+    .prepare(
+      `SELECT product_key, name, name_en, description, description_en, category, ord_price, image_reference, gokun_nuki_available
+       FROM products WHERE store_id = ? AND superseded_at IS NULL AND status = 'ACTIVE' ORDER BY category, product_key`
+    )
+    .all(store.id) as {
+    product_key: string;
+    name: string;
+    name_en: string | null;
+    description: string | null;
+    description_en: string | null;
+    category: string | null;
+    ord_price: number;
+    image_reference: string | null;
+    gokun_nuki_available: number;
+  }[];
+  return rows.map(r => ({
+    productKey: r.product_key,
+    name: r.name,
+    nameEn: r.name_en,
+    description: r.description,
+    descriptionEn: r.description_en,
+    category: r.category,
+    ordPrice: r.ord_price,
+    imageReference: r.image_reference,
+    gokunNukiAvailable: !!r.gokun_nuki_available,
+  }));
+}
+
+interface PublicAccommodation {
+  id: string;
+  name: string;
+  area: string;
+}
+function getPublicAccommodations(): PublicAccommodation[] {
+  return db
+    .prepare('SELECT id, name, area FROM accommodations WHERE active = 1 ORDER BY area, name')
+    .all() as unknown as PublicAccommodation[];
+}
+
+app.get('/api/public/stores', (_req: Request, res: Response) => {
+  res.json({ ok: true, stores: getPublicStores() });
+});
+
+app.get('/api/public/stores/:catalogStoreId/products', (req: Request, res: Response) => {
+  const products = getPublicProductsByCatalogStoreId(req.params.catalogStoreId);
+  if (!products) return res.status(404).json({ ok: false, error: '店舗が見つからないか、現在ご注文いただけません' });
+  res.json({ ok: true, products });
+});
+
+app.get('/api/public/accommodations', (_req: Request, res: Response) => {
+  res.json({ ok: true, accommodations: getPublicAccommodations() });
+});
 
 app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   const rawOrder = req.body;

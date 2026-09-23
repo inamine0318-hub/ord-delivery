@@ -385,6 +385,21 @@ ensureColumn('product_drafts', 'rejection_reason', 'TEXT');
 ensureColumn('products', 'gokun_nuki_available', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('order_line_items', 'gokun_nuki_requested', 'INTEGER NOT NULL DEFAULT 0');
 
+// 【2026-09-23・社長承認・ORDブランドサイト構築】お客様向け公開画面に必要な店舗紹介情報。
+// commission_rate等の内部運用列とは異なり、これらはすべて公開API(/api/public/stores)で
+// そのまま返してよい値のみ（パスワードハッシュ等は含まない）。
+ensureColumn('stores', 'logo_url', 'TEXT');
+ensureColumn('stores', 'description', 'TEXT');
+ensureColumn('stores', 'description_en', 'TEXT');
+ensureColumn('stores', 'tags', 'TEXT'); // JSON配列文字列（例:'["Vegan","Gluten-Free"]'）
+ensureColumn('stores', 'genre', 'TEXT');
+
+// 【2026-09-23・ORDブランドサイト構築】メニューカテゴリ表示用。backend-uitestには既存の列
+// （container_count/square_catalog_item_id等と共に追加済み）だが、本番backendには存在しなかった
+// ため移植する。既存64品目へのカテゴリ値バックフィルは別スクリプトで行う（このensureColumnは
+// 列追加のみ、値の投入は行わない）。
+ensureColumn('products', 'category', 'TEXT');
+
 // 2026-09-22：加盟店手数料ゼロ方針の確定に伴うデータ修正。
 // 過去に0.15（15%）で作成された既存加盟店データを0に更新する（何度実行しても安全な冪等処理）。
 // 新規作成分はDEFAULT_COMMISSION_RATE（index.ts側、0固定）で対応済みのため対象外にはならない。
