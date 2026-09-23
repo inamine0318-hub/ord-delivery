@@ -177,11 +177,15 @@ interface Order {
   phoneNumber: string | null; // Phase B-2A: 配送時の顧客連絡先（必須項目）。厳格な形式チェックはしない
   deliveryLocation: string | null; // Phase B-2A: 配送場所（必須項目）。DB上はTEXT、値の集合はDELIVERY_LOCATIONSで管理
   deliveryInstructions: string | null; // Phase B-2A: 配送指示（任意項目）
-  deliveryTimeMinutes: number | null; // 【STEP C-2 Stage 6】店舗→顧客の実測配送時間（分）
-  driverReward: number | null; // 【STEP C-2 Stage 6】3段階制ドライバー報酬（checkout時に確定）
-  // 【2026-09-23社長承認】配送料（checkout時に確定したtiered配送料）と、注文時点で算出できた
-  // ORD推定利益（商品マスター未接続の明細が1件でもあればnullのまま。遠方出動ボーナスは
-  // この時点では未確定のため含まない、あくまで「推定」であり正式な精算額はsettlement基盤側で確定する）。
+  // 【2026-09-20】正式ドライバー報酬ルール接続：店舗→配送先のGoogle Routes実測時間（分、丸めない）
+  // とドライバー報酬（円）。checkout時点でGoogle Routes実測が成功した場合のみ確定する。
+  // 60分超（要相談）の場合はdriverRewardはNULL（¥0や仮の金額にしない、summarizeDriverPayout参照）。
+  deliveryTimeMinutes: number | null;
+  driverReward: number | null;
+  // 【STEP・2026-09-23社長承認】配送料（checkout時に確定したtiered配送料、¥400/コミッション
+  // モデルとは無関係）と、注文時点で算出できたORD推定利益（商品マスター未接続の明細が
+  // 1件でもあれば算出せずnullのまま。遠方出動ボーナスはこの時点では未確定のため含まない、
+  // あくまで「推定」であり正式な精算額はsettlement基盤側で確定する）。
   deliveryFee: number | null;
   estimatedOrdProfit: number | null;
 }
@@ -195,9 +199,12 @@ const DELIVERY_LOCATIONS = ['HOTEL_FRONT_DESK', 'VILLA_ENTRANCE', 'ROOM', 'MEETI
 // このモジュール自体は概算の簡易実装であり、正確なORD収益（上乗せベース）の計算は
 // STEP C-2（checkoutと商品マスターの接続）完了後に別途実装する。
 const DEFAULT_COMMISSION_RATE = 0;
-// 【2026-09-23・STEP C-2 Stage 6社長承認】旧¥400固定報酬モデル（DRIVER_PAYOUT_PER_DELIVERY）は
-// 廃止。正式ドライバー報酬ルール（3段階制、orders.driver_reward）に完全一本化した
-// （経緯・社長原文は project-ord-next-step-handoff メモリ参照）。
+// 【2026-09-20】固定¥400報酬モデルは正式ドライバー報酬ルール（店舗→配送先のGoogle Routes
+// 車移動時間のみで判定、30分以下¥800/31-50分¥1,000/51-60分¥1,300/60分超要相談）へ置き換え、
+// 現行処理からは排除済み。orders.driver_rewardがNULLの注文は「未確定・要確認」として扱い、
+// ¥0として計上しない（summarizeDriverPayout参照）。checkout/dispatchへのGoogle Routes接続
+// （driver_rewardの自動計算・保存）は別フェーズのため、接続されるまでdriver_rewardは常にNULL
+// のままとなる点に注意。
 
 // ============================================================
 // DBアクセス層（行⇔アプリ内型のマッピング）
@@ -226,6 +233,8 @@ interface DriverRow {
   username: string;
   password_hash: string;
   area: string;
+  // STEP2-D-3-B: ドライバー拠点座標（本人申告の活動拠点。DB側にはensureColumnで追加済みだが
+  // これまでこの型に反映されておらず参照できなかった列を、STEP C-2 Stage 3で公開する）。
   base_latitude: number | null;
   base_longitude: number | null;
 }
@@ -368,6 +377,8 @@ function insertDriver(name: string, lineUserId: string, username: string, passwo
   const info = db
     .prepare("INSERT INTO drivers (name, line_user_id, status, username, password_hash, area) VALUES (?,?,'IDLE',?,?,?)")
     .run(name, lineUserId, username, passwordHash, area);
+  // 新規登録時点ではbase_latitude/base_longitudeはDB側DEFAULT(NULL)のまま
+  // （拠点座標の設定手段を追加するのは今回のスコープ外、既存のPhase2方針を踏襲）。
   return { id: Number(info.lastInsertRowid), name, lineUserId, status: 'IDLE', area, baseLatitude: null, baseLongitude: null };
 }
 function updateDriverStatus(id: number, status: 'IDLE' | 'BUSY') {
@@ -544,6 +555,8 @@ interface ProductDraftRow {
   created_at: string;
   updated_at: string;
   rejection_reason: string | null;
+  extracted_container_count: number | null;
+  extracted_category: string | null;
 }
 interface ProductDraft {
   id: number;
@@ -564,6 +577,8 @@ interface ProductDraft {
   createdAt: string;
   updatedAt: string;
   rejectionReason: string | null;
+  extractedContainerCount: number | null; // 商品マスター完成版：容器の個数（監査用メタデータ）
+  extractedCategory: string | null; // 商品マスター完成版：Food/Dessert/Drink等（監査用メタデータ）
 }
 const rowToProductDraft = (r: ProductDraftRow): ProductDraft => ({
   id: r.id,
@@ -584,6 +599,8 @@ const rowToProductDraft = (r: ProductDraftRow): ProductDraft => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   rejectionReason: r.rejection_reason,
+  extractedContainerCount: r.extracted_container_count,
+  extractedCategory: r.extracted_category,
 });
 
 interface ProductRow {
@@ -606,6 +623,9 @@ interface ProductRow {
   approved_at: string | null;
   created_at: string;
   superseded_at: string | null;
+  square_catalog_item_id: string | null;
+  container_count: number | null;
+  category: string | null;
 }
 interface Product {
   id: number;
@@ -627,6 +647,9 @@ interface Product {
   approvedAt: string | null;
   createdAt: string;
   supersededAt: string | null; // null = 現行版
+  squareCatalogItemId: string | null; // 商品マスター完成版：Square Catalog連携用の外部参照ID。ORDが正本。
+  containerCount: number | null; // 商品マスター完成版：容器の個数（監査用メタデータ）
+  category: string | null; // 商品マスター完成版：Food/Dessert/Drink等（監査用メタデータ）
 }
 const rowToProduct = (r: ProductRow): Product => ({
   id: r.id,
@@ -648,6 +671,9 @@ const rowToProduct = (r: ProductRow): Product => ({
   approvedAt: r.approved_at,
   createdAt: r.created_at,
   supersededAt: r.superseded_at,
+  squareCatalogItemId: r.square_catalog_item_id,
+  containerCount: r.container_count,
+  category: r.category,
 });
 
 function isFiniteNonNegative(n: unknown): n is number {
@@ -667,6 +693,32 @@ function computeOrdPrice(merchantPrice: unknown, containerFee: unknown, markupRa
 }
 function buildCalculationBasis(merchantPrice: number, containerFee: number, markupRate: number): string {
   return `(${merchantPrice} + ${containerFee}) * ${1 + markupRate}`;
+}
+
+// 商品マスター完成版：容器代・容器数の参考ルール（社長承認の正式基準）。
+// 【重要】これはDraft作成・承認画面での「参考値・監査根拠」としてのみ使用し、
+// extracted_container_fee/container_feeを自動的に上書き・強制計算する用途には使わない
+// （例外商品を許容するため。AIが判断した値も自動確定しない既存方針の踏襲）。
+const CONTAINER_RULE_REFERENCE: Record<string, { fee: number; count: number }> = {
+  'ドリンク': { fee: 0, count: 0 },
+  '通常フード': { fee: 50, count: 1 },
+  'ラーメン等': { fee: 100, count: 2 },
+  'カレー': { fee: 100, count: 2 },
+};
+// category/container_count/container_feeの組み合わせが既知の基準と明らかに矛盾していないかを判定する。
+// categoryが未知/未設定、またはcontainerCount/containerFeeが未設定の場合は「判定不能」として
+// 不整合なし扱いにする（推測で不整合と決めつけない）。
+function detectContainerRuleInconsistency(
+  category: string | null,
+  containerCount: number | null,
+  containerFee: number | null
+): boolean {
+  if (!category) return false;
+  const ref = CONTAINER_RULE_REFERENCE[category];
+  if (!ref) return false; // 未知のcategoryは判定不能（新カテゴリの可能性があり、推測で拒否しない）
+  const feeMismatch = containerFee != null && containerFee !== ref.fee;
+  const countMismatch = containerCount != null && containerCount !== ref.count;
+  return feeMismatch || countMismatch;
 }
 
 // STEP3：原本(menu_source_documents)の読み取り専用アクセス。作成・更新・削除APIは今回追加しない
@@ -751,11 +803,15 @@ interface InsertProductDraftInput {
   markupRate: number | null;
   confidence: number | null;
   needsReviewRequested: boolean; // クライアントが明示的に要確認を希望した場合。falseにする方向へは強制できない
+  extractedContainerCount: number | null; // 商品マスター完成版
+  extractedCategory: string | null; // 商品マスター完成版
 }
 // 【重要】computed_ord_price/calculation_basisはこの関数が必ずBackend側で算出し、
 // 呼び出し元（POST /api/product-drafts）からクライアント送信値を一切受け取らない。
 // merchant_price/container_fee/markup_rateのいずれかが未確定・不正な場合はcomputed_ord_price=null、
 // needs_review=trueを強制する（推測で埋めない）。
+// 商品マスター完成版：category/container_count/container_feeの組み合わせに明らかな不整合が
+// 検知された場合もneeds_review=trueを強制する（社長承認：承認時はこれを400でハードブロックする）。
 function insertProductDraft(input: InsertProductDraftInput): ProductDraft {
   const now = new Date().toISOString();
   const computedOrdPrice = computeOrdPrice(input.extractedMerchantPrice, input.extractedContainerFee, input.markupRate);
@@ -763,13 +819,14 @@ function insertProductDraft(input: InsertProductDraftInput): ProductDraft {
     computedOrdPrice !== null
       ? buildCalculationBasis(input.extractedMerchantPrice as number, input.extractedContainerFee as number, input.markupRate as number)
       : null;
-  const needsReview = input.needsReviewRequested || computedOrdPrice === null;
+  const containerInconsistent = detectContainerRuleInconsistency(input.extractedCategory, input.extractedContainerCount, input.extractedContainerFee);
+  const needsReview = input.needsReviewRequested || computedOrdPrice === null || containerInconsistent;
   const status = needsReview ? 'NEEDS_REVIEW' : 'DRAFT';
 
   const info = db
     .prepare(
-      `INSERT INTO product_drafts (source_document_id, store_id, extracted_name, extracted_name_en, extracted_description, extracted_description_en, extracted_merchant_price, extracted_container_fee, markup_rate, computed_ord_price, calculation_basis, confidence, needs_review, status, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO product_drafts (source_document_id, store_id, extracted_name, extracted_name_en, extracted_description, extracted_description_en, extracted_merchant_price, extracted_container_fee, markup_rate, computed_ord_price, calculation_basis, confidence, needs_review, status, created_at, updated_at, extracted_container_count, extracted_category)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       input.sourceDocumentId,
@@ -787,7 +844,9 @@ function insertProductDraft(input: InsertProductDraftInput): ProductDraft {
       needsReview ? 1 : 0,
       status,
       now,
-      now
+      now,
+      input.extractedContainerCount,
+      input.extractedCategory
     );
   return getProductDraftById(Number(info.lastInsertRowid))!;
 }
@@ -819,7 +878,7 @@ function getCurrentProductByKey(productKey: string): ProductRow | undefined {
     | ProductRow
     | undefined;
 }
-// 【STEP C-2 Stage 6・2026-09-23】checkoutの商品解決を商品マスター(products)優先にするための照合。
+// 【STEP C-2】checkoutの商品解決を商品マスター(products)優先にするための照合。
 // product_keyが分からない場合（現行index.htmlはproduct_key未送信）のフォールバックとして、
 // 「同一加盟店・同一商品名・現行version・掲載中(ACTIVE)」で一意に絞り込む。
 // 複数件ヒットする場合は一意に特定できないため、安全側でundefinedを返す（推測しない）。
@@ -843,6 +902,12 @@ interface CreateProductVersionInput {
   ordPrice: number;
   sourceDraftId: number | null;
   approvedBy: string;
+  containerCount: number | null; // 商品マスター完成版：Draftの値をそのまま採用（NULLならNULL、旧版から自動継承しない）
+  category: string | null; // 同上
+  // 商品マスター完成版：square_catalog_item_id。
+  // undefined = 未指定（通常の価格改定シナリオ）→ 旧Versionから自動継承する。
+  // string|null = 明示的に指定（Square側で商品を作り直した場合等）→ その値を優先する（継承しない）。
+  squareCatalogItemId?: string | null;
 }
 // 【最重要】既存versionをUPDATEしない。旧versionはsuperseded_atを設定するだけで残し、
 // 新versionを新規INSERTする。両方の操作を単一トランザクションにまとめ、途中で失敗した場合は
@@ -853,6 +918,10 @@ function createProductVersion(input: CreateProductVersionInput): Product {
     const current = getCurrentProductByKey(input.productKey);
     const now = new Date().toISOString();
     const nextVersion = current ? current.version + 1 : 1;
+    // square_catalog_item_id：リクエストで明示的に指定されていればそれを優先、
+    // 未指定(undefined)なら旧Versionから自動継承する（新規商品で旧Versionが無ければnull）。
+    const squareCatalogItemId =
+      input.squareCatalogItemId !== undefined ? input.squareCatalogItemId : current?.square_catalog_item_id ?? null;
 
     if (current) {
       db.prepare('UPDATE products SET superseded_at = ? WHERE id = ?').run(now, current.id);
@@ -860,8 +929,8 @@ function createProductVersion(input: CreateProductVersionInput): Product {
 
     const info = db
       .prepare(
-        `INSERT INTO products (product_key, store_id, version, name, name_en, description, description_en, merchant_price, container_fee, markup_rate, ord_price, status, source_draft_id, approved_by, approved_at, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', ?,?,?,?)`
+        `INSERT INTO products (product_key, store_id, version, name, name_en, description, description_en, merchant_price, container_fee, markup_rate, ord_price, status, source_draft_id, approved_by, approved_at, created_at, container_count, category, square_catalog_item_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', ?,?,?,?,?,?,?)`
       )
       .run(
         input.productKey,
@@ -878,7 +947,10 @@ function createProductVersion(input: CreateProductVersionInput): Product {
         input.sourceDraftId,
         input.approvedBy,
         now,
-        now
+        now,
+        input.containerCount,
+        input.category,
+        squareCatalogItemId
       );
     const row = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(info.lastInsertRowid)) as unknown as ProductRow;
     return rowToProduct(row);
@@ -886,7 +958,15 @@ function createProductVersion(input: CreateProductVersionInput): Product {
 }
 
 // ============================================================
-// 【STEP C-2 Stage 6・2026-09-23社長承認】精算基盤（backend-uitestから移植）
+// 精算基盤（テスト環境限定、社長承認済み設計）
+// 【重要】今回はDB基盤＋計算ロジックのみ。checkout/productsの実接続・REST API化・管理画面表示は
+// 別フェーズとして明確にスコープ外とする（現状のcheckoutはpriceCatalog.tsのみ参照しており、
+// productsテーブルを一切参照していないため、実際の注文からorder_line_itemsを自動生成する
+// 仕組みはまだ存在しない。合成データによるロジック検証のみを今回の範囲とする）。
+// 既存のcommissionRateForStore()（%コミッション）・calculateOrdProfit()（Square手数料込み
+// 混合利益、pricingRules.ts）はいずれも変更・削除せず、そのまま共存させる（今回の精算基盤とは
+// 別モデルとして併存）。なお固定¥400ドライバー報酬モデルは2026-09-20に正式ドライバー報酬
+// ルールへ置き換え済み（DRIVER_PAYOUT_PER_DELIVERYは削除済み、summarizeDriverPayout参照）。
 // ============================================================
 
 interface OrderLineItemRow {
@@ -1006,6 +1086,8 @@ function computeMerchantSalesUnit(merchantPrice: number, containerFee: number): 
   return merchantPrice + containerFee;
 }
 // 商品粗利益（1個あたり） = ORD単価 - 加盟店売上（単価）
+// 【重要】ORD単価自体は既存のcomputeOrdPrice()（(merchantPrice+containerFee)×(1+markupRate)）を
+// そのまま再利用する。新しい価格計算式をここに作らない。
 function computeProductGrossProfitUnit(ordPriceUnit: number, merchantSalesUnit: number): number {
   return ordPriceUnit - merchantSalesUnit;
 }
@@ -1018,7 +1100,8 @@ function computeDeliveryGrossProfit(deliverySales: number, driverTotalReward: nu
   return deliverySales - driverTotalReward;
 }
 // ORD粗利益（1注文） = 商品粗利益合計 + 配送粗利益
-// 【重要】Square手数料等は含めない（それらは別モデルの責務であり、混同しない）。
+// 【重要】Square手数料等は含めない（それらはcalculateOrdProfit()側の別モデルの責務であり、
+// 混同しない。将来Square手数料・返金等を追加する場合も、この3段階の外側の別計算として扱う）。
 function computeOrdGrossProfitForOrder(
   lineItems: { merchantPrice: number; containerFee: number; ordPriceUnit: number; quantity: number }[],
   deliverySales: number,
@@ -1030,6 +1113,14 @@ function computeOrdGrossProfitForOrder(
     return sum + profitUnit * li.quantity;
   }, 0);
   return productGrossProfitTotal + computeDeliveryGrossProfit(deliverySales, driverTotalReward);
+}
+
+// 精算対象として適格かどうかの判定。
+// 「決済完了」= paymentStatus==='COMPLETED'、「正式成立・必要な完了条件を満たす」= status==='COMPLETED'
+// （配達完了）。いずれか一方でも満たさない注文（未決済・調理中・配達中・キャンセル等）は
+// 推測で精算対象に含めない（社長承認済みの絞り込み条件）。
+function isOrderEligibleForSettlement(order: { paymentStatus: string; status: string }): boolean {
+  return order.paymentStatus === 'COMPLETED' && order.status === 'COMPLETED';
 }
 
 function insertOrderLineItem(input: {
@@ -1073,6 +1164,11 @@ function getOrderLineItemsByOrderId(orderId: number): OrderLineItem[] {
 function getSettlementById(id: number): Settlement | undefined {
   const row = db.prepare('SELECT * FROM settlements WHERE id = ?').get(id) as SettlementRow | undefined;
   return row ? rowToSettlement(row) : undefined;
+}
+function getSettlementItemsBySettlementId(settlementId: number): SettlementItem[] {
+  return (
+    db.prepare('SELECT * FROM settlement_items WHERE settlement_id = ? ORDER BY id').all(settlementId) as unknown as SettlementItemRow[]
+  ).map(rowToSettlementItem);
 }
 
 // 【重要】1注文=1加盟店の既存前提（Phase Bで確定済み）に基づき、注文明細は必ず単一のstore_idに
@@ -1207,6 +1303,13 @@ function advanceSettlementStatus(
   return getSettlementById(id)!;
 }
 
+// ============================================================
+// 【STEP C-2 Stage 5・2026-09-22社長承認】精算処理を呼び出す管理画面用API（新設）。
+// 既存の getUnsettledStoreLineItems / getUnsettledDriverOrders / createSettlement /
+// advanceSettlementStatus はこれまでテストコードからしか呼び出せなかった（本番未接続）。
+// 二重登録・二重精算はcreateSettlement()が依拠するDB制約（idx_settlements_unique_period等）
+// にそのまま任せ、ここでは制約違反の例外をユーザーフレンドリーなエラーに変換するのみ。
+// ============================================================
 function isDuplicateSettlementError(e: unknown): boolean {
   const message = e instanceof Error ? e.message : String(e);
   return message.includes('UNIQUE constraint failed');
@@ -1297,9 +1400,11 @@ app.post('/api/settlements/:id/advance', requireAuth('ADMIN'), (req: Request, re
 function updateOrderDispatch(id: number, storeId: number, driverId: number, status: OrderStatus) {
   db.prepare('UPDATE orders SET store_id = ?, driver_id = ?, status = ? WHERE id = ?').run(storeId, driverId, status, id);
 }
-// 【STEP C-2 Stage 6・2026-09-23社長承認】遠方出動ボーナスは配送手配（ドライバー確定）時に
+// 【STEP C-2 Stage 3・2026-09-22社長承認】遠方出動ボーナスは配送手配（ドライバー確定）時に
 // のみ計算できる（checkout時点ではドライバー未定のため算出不能）。算出できた場合のみ非null、
 // 座標未確定・API失敗・21km超(Consultation)の場合はnullのまま保存する（推測値を作らない）。
+// nullのままの注文は、精算基盤(getUnsettledDriverOrders)側の既存仕様により
+// 自動的に精算対象外のままになる（架空の金額で精算されることはない）。
 function updateOrderRemoteDispatchBonus(id: number, remoteDispatchBonus: number | null) {
   db.prepare('UPDATE orders SET remote_dispatch_bonus = ? WHERE id = ?').run(remoteDispatchBonus, id);
 }
@@ -1457,6 +1562,8 @@ app.post('/api/product-drafts', requireAuth('ADMIN'), (req: Request, res: Respon
   const extractedContainerFee = toNumberOrNull(body.extracted_container_fee);
   const markupRate = toNumberOrNull(body.markup_rate);
   const confidence = toNumberOrNull(body.confidence);
+  const extractedContainerCount = toNumberOrNull(body.extracted_container_count); // 商品マスター完成版
+  const extractedCategory = toStringOrNull(body.extracted_category); // 商品マスター完成版
 
   // 【重要】body.computed_ord_price / body.calculation_basis は意図的に一切読み取らない。
   // クライアント送信の計算結果を信用せず、insertProductDraft()内でBackendが必ず再計算する。
@@ -1476,6 +1583,8 @@ app.post('/api/product-drafts', requireAuth('ADMIN'), (req: Request, res: Respon
     markupRate,
     confidence,
     needsReviewRequested: body.status === 'NEEDS_REVIEW' || body.needs_review === true,
+    extractedContainerCount,
+    extractedCategory,
   });
   res.status(201).json({ ok: true, draft });
 });
@@ -1530,6 +1639,26 @@ app.post('/api/product-drafts/:id/approve', requireAuth('ADMIN'), (req: Request,
       .json({ ok: false, error: '加盟店価格・容器代・上乗せ率が未確定または不正なため、価格を検証できず承認できません' });
   }
 
+  // 商品マスター完成版（社長承認：ハードブロック方式）：category/container_count/container_feeの
+  // 組み合わせが基準と明らかに矛盾している場合は承認を拒否する。AIが判断した値を自動修正せず、
+  // 人間が値を確認・修正して不整合が解消された状態で再度承認operationを行う必要がある。
+  if (detectContainerRuleInconsistency(draft.extractedCategory, draft.extractedContainerCount, draft.extractedContainerFee)) {
+    return res.status(400).json({
+      ok: false,
+      error: `category="${draft.extractedCategory}"の基準に対してcontainer_fee/container_countが一致しません。値を確認・修正してから承認してください。`,
+    });
+  }
+
+  // square_catalog_item_id：bodyにキーが存在する場合のみ明示的な変更として扱う（undefinedなら
+  // createProductVersion()側で旧Versionから自動継承する）。今回Square API通信・検証は行わない。
+  const squareCatalogItemIdOverride: string | null | undefined =
+    'square_catalog_item_id' in (req.body as Record<string, unknown>)
+      ? typeof (req.body as Record<string, unknown>).square_catalog_item_id === 'string' &&
+        (req.body as Record<string, unknown>).square_catalog_item_id !== ''
+        ? ((req.body as Record<string, unknown>).square_catalog_item_id as string)
+        : null
+      : undefined;
+
   let productKey: string;
   if (isNewProduct) {
     // 新規商品登録：ブラウザ送信値は一切使わず、Backendが安全に次番号を採番する。
@@ -1566,6 +1695,9 @@ app.post('/api/product-drafts/:id/approve', requireAuth('ADMIN'), (req: Request,
     ordPrice: recalculatedOrdPrice,
     sourceDraftId: draft.id,
     approvedBy: req.auth!.name,
+    containerCount: draft.extractedContainerCount,
+    category: draft.extractedCategory,
+    squareCatalogItemId: squareCatalogItemIdOverride,
   });
   markProductDraftApproved(draft.id);
 
@@ -1734,7 +1866,7 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
     return { ok: false, error: '商品明細(line_items)が空です' };
   }
 
-  // 【STEP C-2・2026-09-23社長承認】商品マスター(products)優先、未掲載/未接続の店舗のみ
+  // 【STEP C-2・2026-09-22社長承認】商品マスター(products)優先、未掲載/未接続の店舗のみ
   // 旧priceCatalog.tsにフォールバックする。storeIdが商品マスター側のcatalog_store_idと
   // 一致する加盟店が見つかった場合にのみ商品マスターを参照する（見つからなければ完全に
   // 旧経路のまま、フォールバック側の挙動は一切変更しない）。
@@ -1839,10 +1971,11 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
   }
 
   const subtotal = items.reduce((sum, i) => sum + i.lineTotal, 0);
-  // 【STEP C-2・2026-09-23社長承認】容器代は商品マスター側でord_priceに織り込み済みのため、
-  // ここで別途加算しない。配送料のみ、店舗→顧客の実測時間に基づく正式な配送手数料ルール
-  // （checkoutハンドラ側で確定）で決定するため、ここでは旧来の固定値DELIVERY_FEEを
-  // 引き続き暫定値として返す（呼び出し側が上書きする）。
+  // 【STEP C-2・2026-09-22社長承認】容器代は商品マスター側でord_priceに織り込み済みのため、
+  // ここで別途加算しない（旧priceCatalog.tsフォールバック時のCONTAINER_FEEは常に0であり、
+  // このコメント追加は挙動変更を伴わない）。配送料のみ、店舗→顧客の実測時間に基づく
+  // 正式な配送手数料ルール(STEP C-2b、後続のcheckoutハンドラ側)で決定するため、
+  // ここでは旧来の固定値DELIVERY_FEEを引き続き暫定値として返す（呼び出し側が上書きする）。
   const deliveryFee = DELIVERY_FEE;
   const containerFee = CONTAINER_FEE;
   const recalculatedTotal = subtotal + deliveryFee + containerFee;
@@ -2040,8 +2173,9 @@ async function createSquarePaymentLinkForOrder(
   const idempotencyKey = `${orderId}-${paymentAttemptNo}`;
 
   try {
-    // 【STEP C-2 Stage 6・2026-09-23社長承認】配送料を独立したline itemとしてSquareの
-    // 決済金額に反映する。容器代は商品マスターのord_priceに既に織り込み済みのため追加しない。
+    // 【STEP C-2 Stage 4・2026-09-22社長承認】配送料を独立したline itemとしてSquareの
+    // 決済金額に反映する（従来は商品明細のみで、内部記録の合計と実請求額が乖離していた）。
+    // 容器代は商品マスターのord_priceに既に織り込み済みのため、ここには追加しない。
     const lineItems = items.map(i => ({
       name: i.name,
       quantity: String(i.quantity), // Square SDK上quantityは必須のstring型
@@ -2076,6 +2210,28 @@ async function createSquarePaymentLinkForOrder(
     // ログにはエラーメッセージのみを出力し、例外オブジェクト全体は出力しない。
     console.error('[Square CreatePaymentLink] 呼び出しに失敗しました:', e instanceof Error ? e.message : String(e));
     return { ok: false, error: 'Square Payment Linkの生成に失敗しました' };
+  }
+}
+
+// 【2026-09-21・テスト専用注入口】ORD_TEST_HOOKS='true' の場合のみ有効。
+// 未設定時（本番・通常のbackend-uitest起動）はこのオブジェクトが参照されることすらなく、
+// 既存の実装（createSquarePaymentLinkForOrder / updateOrderPaymentLink）がそのまま呼ばれる
+// （動作は一切変わらない）。Square APIへは実接続しない方針のため、checkoutの実HTTP経路上で
+// 「Payment Link発行成功→直後のDB更新失敗」を模擬・再現するために使う（社長承認・2026-09-21）。
+type CheckoutTestHooks = {
+  createSquarePaymentLinkForOrder?: typeof createSquarePaymentLinkForOrder;
+  updateOrderPaymentLink?: typeof updateOrderPaymentLink;
+};
+const __checkoutTestHooks: CheckoutTestHooks = {};
+export function __setCheckoutTestHooks(hooks: CheckoutTestHooks | null): void {
+  if (process.env.ORD_TEST_HOOKS !== 'true') {
+    throw new Error('ORD_TEST_HOOKS=trueの場合のみ使用可能なテスト専用関数です（本番では呼び出し不可）');
+  }
+  if (hooks === null) {
+    delete __checkoutTestHooks.createSquarePaymentLinkForOrder;
+    delete __checkoutTestHooks.updateOrderPaymentLink;
+  } else {
+    Object.assign(__checkoutTestHooks, hooks);
   }
 }
 
@@ -2185,16 +2341,19 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   const deliveryLocation = deliveryLocationRaw;
   const deliveryInstructions = deliveryInstructionsRaw || null; // 任意項目。空ならNULL
 
-  // 【STEP C-2 Stage 6・2026-09-23社長承認】配送料は店舗→顧客の実測時間が確定するまで
+  // 【STEP C-2・2026-09-22社長承認】配送料は店舗→顧客の実測時間が確定するまで
   // 正式な金額を出せない（旧DELIVERY_FEE固定値はこの時点では暫定値）ため、
   // Google Routes実測後にtiered計算へ差し替える。ここでは仮値として保持する。
   let recalculatedTotal = validation.recalculatedTotal!;
 
   // ============================================================
-  // 【STEP C-2 Stage 6・2026-09-23社長承認】正式ドライバー報酬ルールのcheckout接続
+  // 【2026-09-20・社長承認】正式ドライバー報酬ルールのcheckout接続
   // 判定基準は店舗→配送先のGoogle Routes車移動時間のみ（ドライバー拠点→店舗の時間は
-  // 含めない、remote_dispatch_bonusとは別軸）。失敗時・60分超時は推測値を作らず、
-  // 注文自体を作成しない。
+  // 含めない、remote_dispatch_bonusとは別軸）。resolveRestaurantToCustomerPricing()は
+  // 顧客向け配送料金のみを返す設計のため、ドライバー報酬は同じ実測時間を使い
+  // calculateDriverReward()を別途明示的に呼び出す（新規の推測ロジックは作らない）。
+  // 失敗時・60分超時は推測値を作らず、注文自体を作成しない。二重送信記録は
+  // このGoogle Routes判定が成功した場合にのみ行う（失敗時は即時再試行を許可する）。
   // ============================================================
   const restaurantLocation: LatLng | null =
     storeResolution.latitude !== null && storeResolution.longitude !== null
@@ -2222,7 +2381,9 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   const driverReward = driverRewardTier.amount;
 
   // ============================================================
-  // 【STEP C-2 Stage 6・2026-09-23社長承認】配送料・最低注文額のcheckout時リアルタイム反映
+  // 【STEP C-2・2026-09-22社長承認】配送料・最低注文額のcheckout時リアルタイム反映
+  // 判定基準はドライバー報酬と同じ実測deliveryTimeMinutes（店舗→顧客）。
+  // 推測値は使わず、Consultation区分・未達なら注文自体を作成しない。
   // ============================================================
   const deliveryFeeTier = calculateDeliveryFee(db, deliveryTimeMinutes);
   if (deliveryFeeTier.isConsultation || deliveryFeeTier.amount === null) {
@@ -2252,10 +2413,11 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   }
 
   // 旧priceCatalog.ts固定値だったdeliveryFeeを、上で確定したtiered配送料に差し替えて
-  // 正式金額を再計算する（容器代は商品マスターのord_priceに既に織り込み済み）。
+  // 正式金額を再計算する（容器代は商品マスターのord_priceに既に織り込み済みのため
+  // containerFeeはvalidation側の値=0のまま変更しない）。
   recalculatedTotal = validation.subtotal! + deliveryFee + validation.containerFee!;
 
-  // 二重送信の簡易チェック（上記コメント参照）
+  // 二重送信の簡易チェック（上記コメント参照）。Google Routes判定成功後にのみ記録する。
   const now = Date.now();
   pruneOldCheckoutRequests(now);
   const dupKey = checkoutRequestKey(rawOrder, recalculatedTotal);
@@ -2266,12 +2428,16 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
 
   let createdOrderId: number | null = null;
   try {
-    // 【STEP C-2 Stage 6・2026-09-23社長承認】注文本体(orders)と、商品マスターVersion価格の
+    // 【STEP C-2・2026-09-22社長承認】注文本体(orders)と、商品マスターVersion価格の
     // スナップショット(order_line_items)を、同一トランザクションで登録する。
-    // 【2026-09-23社長承認】ORD推定利益（商品マスター接続済みの明細のみで算出可能）。
+    // 片方だけ登録されて片方が失敗する状態（注文はあるのに明細スナップショットが無い等）を
+    // DBレベルで防ぐため。既存のinsertOrder()/insertOrderLineItem()自体は無変更、
+    // ここでの呼び出し方だけを変更する。
+    // 【STEP・2026-09-23社長承認】ORD推定利益（商品マスター接続済みの明細のみで算出可能）。
     // 1件でも旧priceCatalog.tsフォールバック明細(merchantPrice=null)が混ざる注文は、
     // 正確な利益を算出できないため推定しない（架空の数字を作らない）。
-    // 遠方出動ボーナスは配送手配時まで未確定のため、このestimatedOrdProfitには含めない。
+    // 遠方出動ボーナスは配送手配時まで未確定のため、このestimatedOrdProfitには含めない
+    // （＝実際の確定利益は、遠方出動ボーナスが発生する注文ではこの推定値よりやや低くなる）。
     const allLineItemsHaveMasterData = validation.items!.every(i => i.merchantPrice !== null && i.containerFee !== null);
     const estimatedOrdProfit = allLineItemsHaveMasterData
       ? computeOrdGrossProfitForOrder(
@@ -2282,7 +2448,7 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
             quantity: i.quantity,
           })),
           deliveryFee,
-          driverReward! // isConsultationチェック済みのため非null
+          driverReward! // isConsultationチェック済みのため非null（TierLookupResultの型定義上は素通りしない）
         )
       : null;
 
@@ -2318,6 +2484,9 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
         deliveryInstructions,
       });
 
+      // 商品マスターから解決できた明細(productKeyが非null)だけでなく、旧priceCatalog経路の
+      // 明細(productKey=null)もあわせて全件スナップショット保存する。将来productKeyがnullの
+      // 行を見れば「その注文時点では商品マスター未接続だった」と判別できる（架空の対応を作らない）。
       validation.items!.forEach(i => {
         insertOrderLineItem({
           orderId: created.id,
@@ -2334,7 +2503,7 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
 
       return created;
     });
-    createdOrderId = order.id; // ここ以降の例外は「登録済み注文」に対するものと区別する
+    createdOrderId = order.id; // 【2026-09-21】ここ以降の例外は「登録済み注文」に対するものと区別する
 
     if (validation.amountMismatch) {
       console.warn(
@@ -2346,7 +2515,11 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
     // 【重要】失敗しても、上で作成した注文(PENDING)自体は削除しない
     // （ORD側の設定・API不備が原因であり、顧客都合の失敗ではないため）。
     // また、Payment Link生成の成功はpayment_statusをCOMPLETEDにする理由にはならない。
-    const paymentLinkResult = await createSquarePaymentLinkForOrder(order.id, order.paymentAttemptNo, validation.items!, deliveryFee);
+    // 【テスト専用】ORD_TEST_HOOKS='true'の場合のみ、__checkoutTestHooksの差し替えが有効になる。
+    const doCreatePaymentLink =
+      (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.createSquarePaymentLinkForOrder) ||
+      createSquarePaymentLinkForOrder;
+    const paymentLinkResult = await doCreatePaymentLink(order.id, order.paymentAttemptNo, validation.items!, deliveryFee);
     if (!paymentLinkResult.ok) {
       console.error(`[注文受付API] 注文#${order.id}のPayment Link生成に失敗しました: ${paymentLinkResult.error}`);
       return res.status(502).json({
@@ -2356,7 +2529,9 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
       });
     }
 
-    updateOrderPaymentLink(order.id, paymentLinkResult.squareOrderId!, paymentLinkResult.paymentLinkId!);
+    const doUpdateOrderPaymentLink =
+      (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.updateOrderPaymentLink) || updateOrderPaymentLink;
+    doUpdateOrderPaymentLink(order.id, paymentLinkResult.squareOrderId!, paymentLinkResult.paymentLinkId!);
 
     res.status(201).json({
       ok: true,
@@ -2456,8 +2631,12 @@ app.get('/api/stores/:id/settlement', requireAuth('ADMIN', 'STORE'), (req: Reque
   });
 });
 
-// 【STEP C-2 Stage 6・2026-09-23社長承認】¥400固定報酬モデルを廃止し、正式ドライバー報酬
-// ルール（3段階制、orders.driver_reward）ベースの集計に置き換える（backend-uitestから移植）。
+// 配送パートナーの精算（正式ドライバー報酬ルール、店舗→配送先のGoogle Routes車移動時間のみで
+// 判定。driver_rewardがNULLの注文は¥0ではなく「未確定・要確認」として分離集計する。
+// 【重要】checkout/dispatchへのGoogle Routes接続（別フェーズ）が完了するまで、driver_rewardは
+// 常にNULLのままのため、confirmedDeliveryCount/confirmedPayoutTotalは常に0、全件が
+// pendingとして計上される。これは意図した挙動であり、¥0を「確定した報酬額」として誤認しない
+// ための設計。
 interface DriverCompletedOrderRow {
   id: number;
   completed_at: string | null;
@@ -2680,7 +2859,7 @@ app.get('/api/drivers/:id/settlement.pdf', requireAuth('ADMIN', 'DRIVER'), (req:
 });
 
 // 経営サマリー（全加盟店・全ドライバー合算のORD粗利）
-// 【2026-09-23社長承認】ORDの実際の収益源（顧客向け40%上乗せ）に基づく経営サマリー。
+// 【STEP・2026-09-23社長承認】ORDの実際の収益源（顧客向け40%上乗せ）に基づく経営サマリー。
 // 加盟店手数料(commissionRate)は正式に0円のため、以前のような「手数料収益」は存在しない。
 // 各注文のestimated_ord_profit（checkout時点で商品マスター接続済みの明細のみ算出、
 // 遠方出動ボーナス確定前の推定値）を合算する。算出できなかった注文は件数のみ別途表示する
@@ -2734,10 +2913,10 @@ app.get('/api/revenue-simulator', requireAuth('ADMIN'), (req: Request, res: Resp
   const days = Number(q.days) || 30;
   // 注文あたりの配送料（顧客負担）の想定値
   const avgDeliveryFee = q.avgDeliveryFee !== undefined && q.avgDeliveryFee !== '' ? Number(q.avgDeliveryFee) : 500;
-  // 【STEP C-2 Stage 6・2026-09-23社長承認】¥400は正式な一律報酬ではない。正式ドライバー報酬
-  // ルール（30分以下¥800／31-50分¥1,000／51-60分¥1,300／60分超要相談）のうち、中距離区分
-  // （31-50分）の値をシミュレーション上の仮定値として採用する。実際の報酬は配達ごとの
-  // 距離区分（Google Routes実測時間）に基づいて決まり、この仮定値と実際の精算額
+  // 【重要】¥1,000は正式な一律報酬ではない。正式ドライバー報酬ルール（30分以下¥800／
+  // 31-50分¥1,000／51-60分¥1,300／60分超要相談）のうち、中距離区分（31-50分）の値を
+  // シミュレーション上の仮定値として採用しているだけであり、実際の報酬は配達ごとの
+  // 距離区分（Google Routes実測時間）に基づいて決まる。この仮定値と実際の精算額
   // （/api/drivers/:id/settlementで返るconfirmedPayoutTotal）を混同しないこと。
   const DRIVER_PAYOUT_SIMULATION_DEFAULT = 1000;
   const driverPayoutPerDelivery =
@@ -2755,12 +2934,22 @@ app.get('/api/revenue-simulator', requireAuth('ADMIN'), (req: Request, res: Resp
 
   res.json({
     ok: true,
-    assumptions: { dailyOrders, avgMerchantSalesValue, markupRate, avgDeliveryFee, days, driverPayoutPerDelivery },
+    assumptions: {
+      dailyOrders,
+      avgMerchantSalesValue,
+      markupRate,
+      avgDeliveryFee,
+      days,
+      driverPayoutPerDelivery,
+      driverPayoutAssumption:
+        '中距離区分（31〜50分）の仮定値。正式な一律報酬ではなく、実際の報酬は配達ごとの距離区分（Google Routes実測時間）に基づく。',
+    },
     totalOrders,
     grossGmv,
     productGrossProfitTotal,
     deliveryGrossProfitTotal,
     driverPayoutTotal,
+    driverPayoutNote: 'このシミュレーション値は試算用の仮定であり、実際の精算額（/api/drivers/:id/settlementのconfirmedPayoutTotal）とは別物です。',
     ordGrossProfit,
     ordGrossProfitPerDay: Math.round(ordGrossProfit / days),
     currency: 'JPY',
@@ -3085,6 +3274,11 @@ function renderAdminHtml(): string {
   const currentProducts = getCurrentProducts(); // STEP3: 商品マスター管理画面用（現行versionのみ）
   const unassignedLineContacts = getUnassignedLineContacts(); // LINE友だち追加：未割り当て一覧
   const storeNameById = (id: number) => stores.find(s => s.id === id)?.name || `#${id}`;
+  // 管理画面日本語化（3002テスト環境のみ）：DB上の生のstatus値は変更せず、表示用ラベルのみ日本語化する。
+  const draftStatusLabelJa = (status: string): string =>
+    ({ DRAFT: '下書き', NEEDS_REVIEW: '要確認', APPROVED: '承認済み', REJECTED: '却下済み' } as Record<string, string>)[status] || status;
+  const productStatusLabelJa = (status: string): string =>
+    ({ ACTIVE: '有効', INACTIVE: '無効' } as Record<string, string>)[status] || status;
 
   const storeOptions = (selected: number | null) =>
     stores.map(s => `<option value="${s.id}" ${s.id === selected ? 'selected' : ''}>${s.name}</option>`).join('');
@@ -3165,13 +3359,15 @@ function renderAdminHtml(): string {
       <td>${d.extractedNameEn || ''}</td>
       <td>${d.extractedMerchantPrice != null ? yen(d.extractedMerchantPrice) : '-'}</td>
       <td>${d.extractedContainerFee != null ? yen(d.extractedContainerFee) : '-'}</td>
+      <td>${d.extractedContainerCount ?? '-'}</td>
+      <td>${d.extractedCategory || '-'}</td>
       <td>${d.markupRate != null ? Math.round(d.markupRate * 100) + '%' : '-'}</td>
       <td>${d.computedOrdPrice != null ? yen(d.computedOrdPrice) : '-'}</td>
-      <td>${d.status}</td>
-      <td>${d.needsReview ? 'Yes' : 'No'}</td>
+      <td>${draftStatusLabelJa(d.status)}</td>
+      <td>${d.needsReview ? 'はい' : 'いいえ'}</td>
       <td>${d.confidence ?? '-'}</td>
       <td>${d.createdAt}</td>
-      <td><button onclick="viewDraft(${d.id})">View / Review</button></td>
+      <td><button onclick="viewDraft(${d.id})">確認・審査</button></td>
     </tr>`
     )
     .join('');
@@ -3189,10 +3385,13 @@ function renderAdminHtml(): string {
       <td>${p.containerFee != null ? yen(p.containerFee) : '-'}</td>
       <td>${p.markupRate != null ? Math.round(p.markupRate * 100) + '%' : '-'}</td>
       <td>${yen(p.ordPrice)}</td>
-      <td>${p.status}</td>
+      <td>${productStatusLabelJa(p.status)}</td>
       <td>${p.approvedBy || '-'}</td>
       <td>${p.approvedAt || '-'}</td>
-      <td><button class="secondary" onclick="viewVersionHistory('${p.productKey}')">Version History</button></td>
+      <td>${p.category || '-'}</td>
+      <td>${p.containerCount ?? '-'}</td>
+      <td>${p.squareCatalogItemId || '-'}</td>
+      <td><button class="secondary" onclick="viewVersionHistory('${p.productKey}')">バージョン履歴</button></td>
     </tr>`
     )
     .join('');
@@ -3387,7 +3586,7 @@ ${alerts.length ? `<div class="card full" style="border-color:#B3261E;"><h3>⚠�
     <input id="sim-markupRate" placeholder="上乗せ率(%)" value="40" style="width:110px;">
     <input id="sim-avgDeliveryFee" placeholder="配送料/件(円)" value="500" style="width:130px;">
     <input id="sim-days" placeholder="日数" value="30" style="width:80px;">
-    <input id="sim-driverPayout" placeholder="配送報酬/件(円)" value="1000" style="width:130px;">
+    <input id="sim-driverPayout" placeholder="配送報酬/件(円、仮定値)" value="1000" style="width:130px;" title="正式な一律報酬ではなく中距離区分(31-50分)を仮定した試算値">
     <button onclick="runSimulator()">試算する</button>
     <p id="sim-result" style="white-space:pre-wrap;"></p>
   </div>
@@ -3404,37 +3603,37 @@ ${alerts.length ? `<div class="card full" style="border-color:#B3261E;"><h3>⚠�
 </div>
 
 <div class="card full">
-  <h3>📝 Product Drafts</h3>
-  <p>AI（今回未実装）または手動で作成された商品下書き。承認するとProduct Masterへ正式なversionとして登録されます。</p>
+  <h3>📝 商品下書き</h3>
+  <p>AI（今回未実装）または手動で作成された商品下書きです。承認すると、商品マスターへ正式なバージョンとして登録されます。</p>
   <div style="margin-bottom:10px;">
-    <select id="draft-filter-store" onchange="filterDrafts()"><option value="">Store: All</option>${productDraftStoreFilterOptions}</select>
+    <select id="draft-filter-store" onchange="filterDrafts()"><option value="">加盟店：すべて</option>${productDraftStoreFilterOptions}</select>
     <select id="draft-filter-status" onchange="filterDrafts()">
-      <option value="">Status: All</option>
-      <option value="DRAFT">DRAFT</option>
-      <option value="NEEDS_REVIEW">NEEDS_REVIEW</option>
-      <option value="APPROVED">APPROVED</option>
-      <option value="REJECTED">REJECTED</option>
+      <option value="">状態：すべて</option>
+      <option value="DRAFT">下書き</option>
+      <option value="NEEDS_REVIEW">要確認</option>
+      <option value="APPROVED">承認済み</option>
+      <option value="REJECTED">却下済み</option>
     </select>
     <select id="draft-filter-needs-review" onchange="filterDrafts()">
-      <option value="">Needs Review: All</option>
-      <option value="1">Yes</option>
-      <option value="0">No</option>
+      <option value="">要確認：すべて</option>
+      <option value="1">はい</option>
+      <option value="0">いいえ</option>
     </select>
   </div>
   <div class="table-scroll">
   <table id="draft-table">
-  <tr><th>ID</th><th>Store</th><th>Product Name</th><th>English Name</th><th>Merchant Price</th><th>Container Fee</th><th>Markup Rate</th><th>ORD Price</th><th>Status</th><th>Needs Review</th><th>Confidence</th><th>Created At</th><th>操作</th></tr>
-  ${productDraftRows || '<tr><td colspan="13">Draftはまだありません</td></tr>'}
+  <tr><th>ID</th><th>加盟店</th><th>商品名</th><th>英語名</th><th>加盟店価格</th><th>容器代</th><th>容器数</th><th>カテゴリ</th><th>上乗せ率</th><th>ORD価格</th><th>状態</th><th>要確認</th><th>AI信頼度</th><th>作成日時</th><th>操作</th></tr>
+  ${productDraftRows || '<tr><td colspan="15">下書きはまだありません</td></tr>'}
   </table>
   </div>
 </div>
 
 <div class="card full">
-  <h3>🗂 Product Master（現行Version一覧）</h3>
+  <h3>🗂 商品マスター（現行バージョン一覧）</h3>
   <div class="table-scroll">
   <table>
-  <tr><th>Product Key</th><th>Store</th><th>Version</th><th>Name</th><th>English Name</th><th>Merchant Price</th><th>Container Fee</th><th>Markup Rate</th><th>ORD Price</th><th>Status</th><th>Approved By</th><th>Approved At</th><th>操作</th></tr>
-  ${productRows || '<tr><td colspan="13">承認済みの商品はまだありません</td></tr>'}
+  <tr><th>商品キー（Product Key）</th><th>加盟店</th><th>バージョン</th><th>商品名</th><th>英語名</th><th>加盟店価格</th><th>容器代</th><th>上乗せ率</th><th>ORD価格</th><th>状態</th><th>承認者</th><th>承認日時</th><th>カテゴリ</th><th>容器数</th><th>Square Catalog Item ID</th><th>操作</th></tr>
+  ${productRows || '<tr><td colspan="16">承認済みの商品はまだありません</td></tr>'}
   </table>
   </div>
 </div>
@@ -3520,7 +3719,9 @@ async function runSimulator(){
     '総売上(GMV・配送料込み): ¥'+d.grossGmv.toLocaleString()+'\\n'+
     '商品上乗せ粗利: ¥'+d.productGrossProfitTotal.toLocaleString()+'\\n'+
     '配送マージン(配送料-報酬): ¥'+d.deliveryGrossProfitTotal.toLocaleString()+'\\n'+
-    '配送パートナー報酬支払: ¥'+d.driverPayoutTotal.toLocaleString()+'\\n'+
+    '配送パートナー報酬支払(試算・仮定値ベース): ¥'+d.driverPayoutTotal.toLocaleString()+'\\n'+
+    '　※'+d.assumptions.driverPayoutAssumption+'\\n'+
+    '　※'+d.driverPayoutNote+'\\n'+
     'ORD粗利: ¥'+d.ordGrossProfit.toLocaleString()+'（1日あたり ¥'+d.ordGrossProfitPerDay.toLocaleString()+'）';
 }
 async function createDriver(){
@@ -3566,6 +3767,24 @@ function filterDrafts(){
   });
 }
 function yenJs(n){ return n == null ? '-' : '¥' + Number(n).toLocaleString('ja-JP'); }
+// 管理画面日本語化（3002テスト環境のみ）：APIが返す生のstatus値は変更せず、表示ラベルのみ日本語化する。
+function draftStatusLabelJs(status){
+  return ({DRAFT:'下書き', NEEDS_REVIEW:'要確認', APPROVED:'承認済み', REJECTED:'却下済み'})[status] || status;
+}
+// 商品マスター完成版：Backend側のCONTAINER_RULE_REFERENCE/detectContainerRuleInconsistency()と
+// 同一の参考値・判定ロジックを表示専用に再現（実際の承認可否はBackendが最終判断する。
+// このJS側の判定は「承認前にUI上で警告を出す」ための表示補助に過ぎない）。
+const CONTAINER_RULE_REFERENCE_JS = {
+  'ドリンク': {fee:0, count:0}, '通常フード': {fee:50, count:1}, 'ラーメン等': {fee:100, count:2}, 'カレー': {fee:100, count:2}
+};
+function detectContainerRuleInconsistencyJs(category, containerCount, containerFee){
+  if(!category) return false;
+  const ref = CONTAINER_RULE_REFERENCE_JS[category];
+  if(!ref) return false;
+  const feeMismatch = containerFee != null && containerFee !== ref.fee;
+  const countMismatch = containerCount != null && containerCount !== ref.count;
+  return feeMismatch || countMismatch;
+}
 
 async function viewDraft(id){
   const res = await fetch('/api/product-drafts/'+id);
@@ -3573,71 +3792,85 @@ async function viewDraft(id){
   if(!d.ok){ alert('エラー: '+d.error); return; }
   const draft = d.draft;
 
-  let sourceHtml = '<p>Source document unavailable</p>';
+  let sourceHtml = '<p>元資料の情報を取得できませんでした</p>';
   if (draft.sourceDocumentId){
     const docRes = await fetch('/api/menu-source-documents/'+draft.sourceDocumentId);
     const docData = await docRes.json();
     if (docData.ok){
       const doc = docData.document;
       sourceHtml =
-        '<div class="field-row"><span>File</span><b>'+(doc.originalFilename || '(unknown)')+'</b></div>'+
-        '<div class="field-row"><span>MIME Type</span><b>'+(doc.mimeType || '-')+'</b></div>'+
-        '<div class="field-row"><span>Size</span><b>'+(doc.fileSize != null ? doc.fileSize + ' bytes' : '-')+'</b></div>'+
-        '<div class="field-row"><span>Uploaded At</span><b>'+doc.uploadedAt+'</b></div>'+
-        '<div class="field-row"><span>Uploaded By</span><b>'+(doc.uploadedBy || '-')+'</b></div>'+
-        '<div class="field-row"><span>File Hash</span><b style="word-break:break-all;">'+(doc.fileHash || '-')+'</b></div>';
+        '<div class="field-row"><span>ファイル名</span><b>'+(doc.originalFilename || '(不明)')+'</b></div>'+
+        '<div class="field-row"><span>ファイル形式（MIME Type）</span><b>'+(doc.mimeType || '-')+'</b></div>'+
+        '<div class="field-row"><span>サイズ</span><b>'+(doc.fileSize != null ? doc.fileSize + ' bytes' : '-')+'</b></div>'+
+        '<div class="field-row"><span>アップロード日時</span><b>'+doc.uploadedAt+'</b></div>'+
+        '<div class="field-row"><span>アップロード者</span><b>'+(doc.uploadedBy || '-')+'</b></div>'+
+        '<div class="field-row"><span>ファイルハッシュ</span><b style="word-break:break-all;">'+(doc.fileHash || '-')+'</b></div>';
     } else {
-      sourceHtml = '<p>Source document unavailable</p>';
+      sourceHtml = '<p>元資料の情報を取得できませんでした</p>';
     }
   }
 
   const canDecide = draft.status === 'DRAFT' || draft.status === 'NEEDS_REVIEW';
+  const containerInconsistent = detectContainerRuleInconsistencyJs(draft.extractedCategory, draft.extractedContainerCount, draft.extractedContainerFee);
   const storeProducts = CURRENT_PRODUCTS.filter(function(p){ return p.storeId === draft.storeId; });
   const existingOptions = storeProducts.map(function(p){
     return '<option value="'+p.productKey+'">'+p.productKey+' — '+p.name+' (v'+p.version+', '+yenJs(p.ordPrice)+')</option>';
   }).join('');
 
+  const inconsistencyWarningHtml = containerInconsistent
+    ? '<div class="notice-box" style="border-color:#B3261E;color:#B3261E;">⚠️ 容器代・容器数がカテゴリ「'+draft.extractedCategory+'」の基準（'+
+      'ドリンク:¥0/0個、通常フード:¥50/1個、ラーメン等:¥100/2個、カレー:¥100/2個'+
+      '）と一致しません。承認する前に値を確認・修正してください。</div>'
+    : '';
+
+  const approveSectionHtml = containerInconsistent
+    ? '<div class="modal-section"><h4>承認</h4><div class="notice-box" style="border-color:#B3261E;color:#B3261E;">⚠️ 容器代・容器数の不整合が解消されるまで承認できません（Backend側でも400エラーとして拒否されます）。</div></div>'
+    : '<div class="modal-section"><h4>承認</h4>'+
+      '<label style="display:block;font-size:12.5px;margin:4px 0;"><input type="radio" name="approve-mode-'+id+'" value="new" checked onchange="toggleApproveMode('+id+')"> 新商品として登録</label>'+
+      '<label style="display:block;font-size:12.5px;margin:4px 0;"><input type="radio" name="approve-mode-'+id+'" value="existing" onchange="toggleApproveMode('+id+')" '+(storeProducts.length===0?'disabled':'')+'> 既存商品を更新'+(storeProducts.length===0?'（この加盟店には既存商品がありません）':'')+'</label>'+
+      '<div id="approve-existing-'+id+'" style="display:none;margin-top:8px;"><select id="approve-existing-select-'+id+'">'+existingOptions+'</select></div>'+
+      '<button style="margin-top:10px;" onclick="approveDraft('+id+')">承認</button>'+
+      '</div>';
+
   const decideHtml = canDecide ? (
-    '<div class="modal-section"><h4>Approve</h4>'+
-    '<label style="display:block;font-size:12.5px;margin:4px 0;"><input type="radio" name="approve-mode-'+id+'" value="new" checked onchange="toggleApproveMode('+id+')"> Register as New Product</label>'+
-    '<label style="display:block;font-size:12.5px;margin:4px 0;"><input type="radio" name="approve-mode-'+id+'" value="existing" onchange="toggleApproveMode('+id+')" '+(storeProducts.length===0?'disabled':'')+'> Update Existing Product'+(storeProducts.length===0?' (no existing products for this store)':'')+'</label>'+
-    '<div id="approve-existing-'+id+'" style="display:none;margin-top:8px;"><select id="approve-existing-select-'+id+'">'+existingOptions+'</select></div>'+
-    '<button style="margin-top:10px;" onclick="approveDraft('+id+')">Approve</button>'+
-    '</div>'+
-    '<div class="modal-section"><h4>Reject</h4>'+
-    '<textarea id="reject-reason-'+id+'" rows="2" placeholder="Rejection reason (optional)"></textarea>'+
-    '<button class="secondary" style="margin-top:8px;" onclick="rejectDraft('+id+')">Reject</button>'+
+    approveSectionHtml+
+    '<div class="modal-section"><h4>却下</h4>'+
+    '<textarea id="reject-reason-'+id+'" rows="2" placeholder="却下理由（任意）"></textarea>'+
+    '<button class="secondary" style="margin-top:8px;" onclick="rejectDraft('+id+')">却下</button>'+
     '</div>'
-  ) : '<div class="modal-section"><p>This draft is already '+draft.status+' and can no longer be approved or rejected.</p></div>';
+  ) : '<div class="modal-section"><p>この下書きは既に'+draftStatusLabelJs(draft.status)+'状態のため、承認・却下できません。</p></div>';
 
   const body =
-    '<div class="modal-section"><h4>Source</h4>'+
-    '<div class="field-row"><span>source_document_id</span><b>'+(draft.sourceDocumentId ?? '(none)')+'</b></div>'+
+    '<div class="modal-section"><h4>原本情報</h4>'+
+    '<div class="field-row"><span>元資料ID（source_document_id）</span><b>'+(draft.sourceDocumentId ?? '(なし)')+'</b></div>'+
     sourceHtml+
     '</div>'+
-    '<div class="modal-section"><h4>Extracted Product</h4>'+
-    '<div class="field-row"><span>Name</span><b>'+(draft.extractedName || '(none)')+'</b></div>'+
-    '<div class="field-row"><span>English Name</span><b>'+(draft.extractedNameEn || '-')+'</b></div>'+
-    '<div class="field-row"><span>Description</span><b>'+(draft.extractedDescription || '-')+'</b></div>'+
-    '<div class="field-row"><span>English Description</span><b>'+(draft.extractedDescriptionEn || '-')+'</b></div>'+
+    '<div class="modal-section"><h4>抽出された商品情報</h4>'+
+    '<div class="field-row"><span>商品名</span><b>'+(draft.extractedName || '(未設定)')+'</b></div>'+
+    '<div class="field-row"><span>英語名</span><b>'+(draft.extractedNameEn || '-')+'</b></div>'+
+    '<div class="field-row"><span>説明</span><b>'+(draft.extractedDescription || '-')+'</b></div>'+
+    '<div class="field-row"><span>英語説明</span><b>'+(draft.extractedDescriptionEn || '-')+'</b></div>'+
     '</div>'+
-    '<div class="modal-section"><h4>ORD Pricing</h4>'+
-    '<div class="field-row"><span>Merchant Price</span><b>'+yenJs(draft.extractedMerchantPrice)+'</b></div>'+
-    '<div class="field-row"><span>Container Fee</span><b>'+yenJs(draft.extractedContainerFee)+'</b></div>'+
-    '<div class="field-row"><span>Markup Rate</span><b>'+(draft.markupRate != null ? Math.round(draft.markupRate*100)+'%' : '-')+'</b></div>'+
-    '<div class="field-row"><span>ORD Price (Draft, reference only)</span><b>'+yenJs(draft.computedOrdPrice)+'</b></div>'+
-    '<div class="field-row"><span>Calculation Basis</span><b>'+(draft.calculationBasis || '-')+'</b></div>'+
-    '<div class="notice-box">⚠️ The ORD Price shown here is a reference value only. When approved, the Backend recalculates the price from Merchant Price / Container Fee / Markup Rate, and only that recalculated value becomes the official ORD Price.</div>'+
+    '<div class="modal-section"><h4>ORD価格情報（価格根拠を一目で確認）</h4>'+
+    '<div class="field-row"><span>加盟店価格</span><b>'+yenJs(draft.extractedMerchantPrice)+'</b></div>'+
+    '<div class="field-row"><span>容器代</span><b>'+yenJs(draft.extractedContainerFee)+'</b></div>'+
+    '<div class="field-row"><span>容器数</span><b>'+(draft.extractedContainerCount ?? '-')+'</b></div>'+
+    '<div class="field-row"><span>カテゴリ</span><b>'+(draft.extractedCategory || '-')+'</b></div>'+
+    '<div class="field-row"><span>上乗せ率</span><b>'+(draft.markupRate != null ? Math.round(draft.markupRate*100)+'%' : '-')+'</b></div>'+
+    '<div class="field-row"><span>ORD価格（下書き・参考値）</span><b>'+yenJs(draft.computedOrdPrice)+'</b></div>'+
+    '<div class="field-row"><span>計算根拠</span><b>'+(draft.calculationBasis || '-')+'</b></div>'+
+    '<div class="notice-box">⚠️ ここに表示されているORD価格は参考値です。承認時に、バックエンドが加盟店価格・容器代・上乗せ率から価格を再計算します。再計算された価格のみが正式なORD価格として登録されます。</div>'+
+    inconsistencyWarningHtml+
     '</div>'+
-    '<div class="modal-section"><h4>AI / Review</h4>'+
-    '<div class="field-row"><span>Confidence</span><b>'+(draft.confidence ?? '-')+'</b></div>'+
-    '<div class="field-row"><span>Needs Review</span><b>'+(draft.needsReview ? 'Yes' : 'No')+'</b></div>'+
-    '<div class="field-row"><span>Status</span><b>'+draft.status+'</b></div>'+
-    (draft.rejectionReason ? '<div class="field-row"><span>Rejection Reason</span><b>'+draft.rejectionReason+'</b></div>' : '')+
+    '<div class="modal-section"><h4>AI / 確認状況</h4>'+
+    '<div class="field-row"><span>AI信頼度</span><b>'+(draft.confidence ?? '-')+'</b></div>'+
+    '<div class="field-row"><span>要確認</span><b>'+(draft.needsReview ? 'はい' : 'いいえ')+'</b></div>'+
+    '<div class="field-row"><span>状態</span><b>'+draftStatusLabelJs(draft.status)+'</b></div>'+
+    (draft.rejectionReason ? '<div class="field-row"><span>却下理由</span><b>'+draft.rejectionReason+'</b></div>' : '')+
     '</div>'+
     decideHtml;
 
-  openModal('Product Draft #'+id, body);
+  openModal('商品下書き #'+id, body);
 }
 
 function toggleApproveMode(id){
@@ -3651,12 +3884,12 @@ async function approveDraft(id){
   let productKey = null;
   if (mode === 'existing'){
     const sel = document.getElementById('approve-existing-select-'+id);
-    if (!sel || !sel.value){ alert('Please select an existing product.'); return; }
+    if (!sel || !sel.value){ alert('既存商品を選択してください。'); return; }
     productKey = sel.value;
   }
   const confirmMsg = mode === 'existing'
-    ? 'This draft will become a new version of the selected existing product.\\nThe current version will be retained as history.\\nContinue?'
-    : 'This draft will become a new active product (Version 1).\\nContinue?';
+    ? 'この下書きは、選択した既存商品の新しいバージョンとして登録されます。\\n現在のバージョンは履歴として保持されます。\\n続行しますか？'
+    : 'この下書きは、新しい有効な商品（Version 1）として登録されます。\\n続行しますか？';
   if (!confirm(confirmMsg)) return;
   const res = await fetch('/api/product-drafts/'+id+'/approve', {
     method: 'POST', headers: {'Content-Type':'application/json'},
@@ -3664,7 +3897,7 @@ async function approveDraft(id){
   });
   const d = await res.json();
   if(!d.ok){ alert('エラー: '+d.error); return; }
-  alert('Approved. Product '+d.product.productKey+' Version '+d.product.version+' is now active.');
+  alert('承認しました。商品「'+d.product.productKey+'」のバージョン'+d.product.version+'が有効になりました。');
   closeModal();
   location.reload();
 }
@@ -3677,7 +3910,7 @@ async function rejectDraft(id){
   });
   const d = await res.json();
   if(!d.ok){ alert('エラー: '+d.error); return; }
-  alert('Draft rejected.');
+  alert('却下しました。');
   closeModal();
   location.reload();
 }
@@ -3687,18 +3920,21 @@ async function viewVersionHistory(productKey){
   const versions = await res.json();
   const body = versions.map(function(v){
     return '<div class="modal-section">'+
-      '<div class="field-row"><span>Version</span><b>'+v.version+' '+(v.supersededAt ? '(Superseded)' : '(Current)')+'</b></div>'+
-      '<div class="field-row"><span>Merchant Price</span><b>'+yenJs(v.merchantPrice)+'</b></div>'+
-      '<div class="field-row"><span>Container Fee</span><b>'+yenJs(v.containerFee)+'</b></div>'+
-      '<div class="field-row"><span>Markup Rate</span><b>'+(v.markupRate != null ? Math.round(v.markupRate*100)+'%' : '-')+'</b></div>'+
-      '<div class="field-row"><span>ORD Price</span><b>'+yenJs(v.ordPrice)+'</b></div>'+
-      '<div class="field-row"><span>Approved By</span><b>'+(v.approvedBy || '-')+'</b></div>'+
-      '<div class="field-row"><span>Approved At</span><b>'+(v.approvedAt || '-')+'</b></div>'+
-      '<div class="field-row"><span>Source Draft ID</span><b>'+(v.sourceDraftId ?? '-')+'</b></div>'+
-      '<div class="field-row"><span>Superseded At</span><b>'+(v.supersededAt || '-')+'</b></div>'+
+      '<div class="field-row"><span>バージョン</span><b>'+v.version+' '+(v.supersededAt ? '（過去バージョン）' : '（現行バージョン）')+'</b></div>'+
+      '<div class="field-row"><span>加盟店価格</span><b>'+yenJs(v.merchantPrice)+'</b></div>'+
+      '<div class="field-row"><span>容器代</span><b>'+yenJs(v.containerFee)+'</b></div>'+
+      '<div class="field-row"><span>上乗せ率</span><b>'+(v.markupRate != null ? Math.round(v.markupRate*100)+'%' : '-')+'</b></div>'+
+      '<div class="field-row"><span>ORD価格</span><b>'+yenJs(v.ordPrice)+'</b></div>'+
+      '<div class="field-row"><span>承認者</span><b>'+(v.approvedBy || '-')+'</b></div>'+
+      '<div class="field-row"><span>承認日時</span><b>'+(v.approvedAt || '-')+'</b></div>'+
+      '<div class="field-row"><span>元Draft ID（Source Draft ID）</span><b>'+(v.sourceDraftId ?? '-')+'</b></div>'+
+      '<div class="field-row"><span>カテゴリ</span><b>'+(v.category || '-')+'</b></div>'+
+      '<div class="field-row"><span>容器数</span><b>'+(v.containerCount ?? '-')+'</b></div>'+
+      '<div class="field-row"><span>Square Catalog Item ID</span><b>'+(v.squareCatalogItemId || '-')+'</b></div>'+
+      '<div class="field-row"><span>置き換えられた日時</span><b>'+(v.supersededAt || '-')+'</b></div>'+
       '</div>';
-  }).join('') || '<p>No versions found.</p>';
-  openModal('Version History: '+productKey, body);
+  }).join('') || '<p>バージョン履歴がありません。</p>';
+  openModal('バージョン履歴：'+productKey, body);
 }
 
 function toggleTheme(){
@@ -3928,7 +4164,7 @@ app.post('/api/orders/:id/dispatch', requireAuth('ADMIN'), async (req: Request, 
     updateOrderDispatch(order.id, store.id, driver.id, 'PREPARING');
     updateDriverStatus(driver.id, 'BUSY');
 
-    // 【STEP C-2 Stage 6・2026-09-23社長承認】遠方出動ボーナスをここで確定する。
+    // 【STEP C-2 Stage 3・2026-09-22社長承認】遠方出動ボーナスをここで確定する。
     // ドライバー拠点・店舗いずれかの座標が未確定の場合は、推測せずnullのまま保存する。
     if (driver.baseLatitude !== null && driver.baseLongitude !== null && store.latitude !== null && store.longitude !== null) {
       const driverBase: LatLng = { latitude: driver.baseLatitude, longitude: driver.baseLongitude };
@@ -3942,7 +4178,6 @@ app.post('/api/orders/:id/dispatch', requireAuth('ADMIN'), async (req: Request, 
     } else {
       console.warn(`[手配API] ドライバー#${driver.id}または店舗#${store.id}の拠点座標が未登録のため、遠方出動ボーナスを算出できませんでした（注文#${order.id}）`);
     }
-
     if (updatedOrder.customerLineId) {
       await pushLine(updatedOrder.customerLineId, buildCustomerFlex(updatedOrder, 'PREPARING'));
     }
@@ -4114,10 +4349,17 @@ app.post('/webhooks/line', (req: Request, res: Response) => {
   res.status(200).send('OK');
 });
 
-app.listen(PORT, () => {
-  console.log(`ORD backend (TypeScript) listening on http://localhost:${PORT}`);
-  console.log(`管理画面: http://localhost:${PORT}/admin`);
-  console.log(`Square連携: ${squareConfigured ? '実接続' : '未設定（Webhookペイロードのデータのみ使用）'}`);
-  console.log(`LINE連携: ${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}`);
-  console.log(`LINE Webhook署名検証: ${lineWebhookSecurityConfigured ? '有効' : '未設定（本番投入前に必ずLINE_CHANNEL_SECRETを設定すること）'}`);
-});
+// 【2026-09-20】テストからExpress appを直接利用できるようにする（ORD_SKIP_LISTEN環境変数）。
+// 未設定時の既存動作（起動時に自動でlistenする、本番相当の実行方法）は変更しない。
+// テスト側でORD_SKIP_LISTEN='true'を指定し、importしたappに対して自分でlisten()する。
+if (process.env.ORD_SKIP_LISTEN !== 'true') {
+  app.listen(PORT, () => {
+    console.log(`ORD backend (TypeScript) listening on http://localhost:${PORT}`);
+    console.log(`管理画面: http://localhost:${PORT}/admin`);
+    console.log(`Square連携: ${squareConfigured ? '実接続' : '未設定（Webhookペイロードのデータのみ使用）'}`);
+    console.log(`LINE連携: ${lineConfigured ? '実送信' : '未設定（コンソールログのみ）'}`);
+    console.log(`LINE Webhook署名検証: ${lineWebhookSecurityConfigured ? '有効' : '未設定（本番投入前に必ずLINE_CHANNEL_SECRETを設定すること）'}`);
+  });
+}
+
+export { app };

@@ -8,10 +8,17 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// 【2026-09-20】テスト時にDB接続先を差し替え可能にする（ORD_DB_PATH環境変数）。
+// 未設定時の既存動作（backend-uitest/data/ord.dbへの接続）は変更しない。
+// ORD_DB_PATH=':memory:' を指定すれば、実ファイルに一切触れない使い捨てDBで
+// 実サーバー経由の統合テストができる。
+const DB_PATH = process.env.ORD_DB_PATH || path.join(__dirname, '..', 'data', 'ord.db');
+if (DB_PATH !== ':memory:') {
+  const dbDir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+}
 
-export const db = new DatabaseSync(path.join(DATA_DIR, 'ord.db'));
+export const db = new DatabaseSync(DB_PATH);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS stores (
@@ -199,8 +206,20 @@ db.exec(`
     superseded_at TEXT
   );
 
-  -- 【2026-09-23・STEP C-2 Stage 6・社長承認】backend-uitestから移植。
-  -- 注文明細のVersion価格スナップショット（商品マスター未接続の明細はNULLのまま保存）。
+  -- ============================================================
+  -- 精算基盤（テスト環境限定・社長承認済み）。
+  -- 【重要】今回はDB基盤＋計算ロジックのみ。checkout/productsの実接続は別フェーズ（今回スコープ外）。
+  -- 既存のcommissionRateForStore()（%コミッション）・calculateOrdProfit()（Square手数料込み
+  -- 混合利益）はいずれも変更・削除せず、そのまま共存させる。なお固定¥400ドライバー報酬モデルは
+  -- 2026-09-20に正式ドライバー報酬ルールへ置き換え済み（index.ts参照）。
+  -- ============================================================
+
+  -- 注文明細の商品スナップショット（加盟店定価・容器代・上乗せ率・ORD単価を注文時点で固定）。
+  -- product_key/product_versionはproductsテーブルへの追跡用参照だが、実値もこの行に冗長に
+  -- 保持することで、productsが将来変更されても（Versionは不変のはずだが）この行だけで
+  -- 完結して説明できるようにする（orders.accommodation_latitude等と同じ設計思想）。
+  -- 現状のcheckoutはproductsテーブルを参照していないため、実際の注文ではこれらの列は
+  -- NULLのままになる（別フェーズでcheckoutをproducts参照に切り替えるまでの既知の制約）。
   CREATE TABLE IF NOT EXISTS order_line_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id INTEGER NOT NULL,
@@ -233,6 +252,8 @@ db.exec(`
     notes TEXT
   );
 
+  -- 精算の内訳。二重振込防止の要（下の部分UNIQUE INDEXでDBレベルに保証する）。
+  -- 加盟店精算＝order_line_item_id単位、ドライバー精算＝order_id単位（NULL）で計上する。
   CREATE TABLE IF NOT EXISTS settlement_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     settlement_id INTEGER NOT NULL,
@@ -279,7 +300,8 @@ db.exec(
 // 存在しない（0件）ため、既存データへの影響はない。
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_products_key_version ON products(product_key, version)');
 
-// 【2026-09-23・STEP C-2 Stage 6】精算基盤のindex（backend-uitestから移植）。
+// 精算基盤のindex。
+db.exec('CREATE INDEX IF NOT EXISTS idx_order_line_items_order_id ON order_line_items(order_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_settlements_payee ON settlements(payee_type, payee_id)');
 // 【重要】同一payee_type/payee_id/period_start/period_endの精算をDBレベルで重複作成禁止
 // （社長承認済み。同一期間を2回集計しても2件目はDB制約で拒否される）。
@@ -288,7 +310,8 @@ db.exec(
 );
 db.exec('CREATE INDEX IF NOT EXISTS idx_settlement_items_settlement_id ON settlement_items(settlement_id)');
 // 【最重要・二重振込防止】同一order_line_item（加盟店精算）・同一order_id(ドライバー精算)が
-// 複数のsettlementに計上されることをDBレベルで禁止する（部分UNIQUE INDEX）。
+// 複数のsettlementに計上されることをDBレベルで禁止する（部分UNIQUE INDEX、既存の
+// idx_products_current_version等と同じ手法）。
 db.exec(
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_items_line_once ON settlement_items(order_line_item_id) WHERE order_line_item_id IS NOT NULL'
 );
@@ -383,6 +406,25 @@ ensureColumn('product_drafts', 'rejection_reason', 'TEXT');
 // 新規作成分はDEFAULT_COMMISSION_RATE（index.ts側、0固定）で対応済みのため対象外にはならない。
 db.exec('UPDATE stores SET commission_rate = 0 WHERE commission_rate <> 0');
 
+// 【2026-09-23・社長承認】最低注文額の41〜50分区分を、誤った¥15,000から
+// 正式確定値¥12,000（2026-09-22社長訂正）へ修正する。冪等処理：該当行が
+// 既に¥12,000になっていれば何も起きない。
+db.exec("UPDATE pricing_rules SET amount = 12000 WHERE rule_type = 'MINIMUM_ORDER' AND range_min = 40 AND range_max = 50 AND amount = 15000");
+
+// 商品マスター完成版（テスト環境限定・社長承認済み5列）。
+// いずれもNULL許容の追加のみで、既存データ・Version管理ロジック・UNIQUE INDEXには影響しない。
+// square_catalog_item_id: Square Catalog連携用の外部参照ID。ORD側product_key/versionが正本。
+// Version更新時は旧Versionから自動継承する（index.ts側のcreateProductVersion()で実装）。
+ensureColumn('products', 'square_catalog_item_id', 'TEXT');
+// container_count: 容器の個数（構造化データ）。container_fee(金額)とは別概念、監査用メタデータ。
+ensureColumn('products', 'container_count', 'INTEGER');
+// category: Food/Dessert/Drink等。容器代・容器数ルールがカテゴリ依存のため監査用に保持。
+// container_fee/container_countを自動上書きする計算元には使わない（例外商品を許容するため）。
+ensureColumn('products', 'category', 'TEXT');
+// product_drafts側も既存のextracted_merchant_price/extracted_container_feeと同じパターンで追加。
+ensureColumn('product_drafts', 'extracted_container_count', 'INTEGER');
+ensureColumn('product_drafts', 'extracted_category', 'TEXT');
+
 // pricing_rules の初期シード（テーブルが空の場合のみ。既存データがあれば一切上書きしない）
 function seedPricingRulesIfEmpty() {
   const { c } = db.prepare('SELECT COUNT(*) as c FROM pricing_rules').get() as { c: number };
@@ -427,16 +469,15 @@ function seedPricingRulesIfEmpty() {
     [60, null, null, true, 6],
   ]);
 
-  // ドライバー基本報酬（店舗→顧客の実走行時間、燃料費込み）
-  // 0以上20以下=¥800 / 20超30以下=¥1,000 / 30超40以下=¥1,300 / 40超50以下=¥1,600 /
-  // 50超60以下=¥2,000 / 60超=要相談
+  // ドライバー基本報酬（店舗→顧客の実走行時間、燃料費込み）【2026-09-20確定・正式4段階】
+  // 0以上30以下=¥800(近距離) / 30超50以下=¥1,000(中距離) / 50超60以下=¥1,300(長距離) / 60超=要相談
+  // 【修正】旧6段階(20分刻み)は誤り。2026-09-21社長承認により本ファイル(テストDB用シード)のみ修正。
+  // backend/src/db.ts（本番）は未修正（本番反映は別途承認が必要）。
   timeRules('DRIVER_REWARD', [
-    [null, 20, 800, false, 1],
-    [20, 30, 1000, false, 2],
-    [30, 40, 1300, false, 3],
-    [40, 50, 1600, false, 4],
-    [50, 60, 2000, false, 5],
-    [60, null, null, true, 6],
+    [null, 30, 800, false, 1],
+    [30, 50, 1000, false, 2],
+    [50, 60, 1300, false, 3],
+    [60, null, null, true, 4],
   ]);
 
   // 遠隔ドライバーボーナス（ドライバー拠点→店舗の距離、km）
@@ -454,44 +495,6 @@ function seedPricingRulesIfEmpty() {
   });
 }
 seedPricingRulesIfEmpty();
-
-// 【2026-09-23・STEP C-2 Stage 6・社長承認】ドライバー報酬の旧6段階(20分刻み)を
-// 正式3段階制(¥800/¥1,000/¥1,300/要相談、2026-09-20社長最終確定)へ移行する。
-// seedPricingRulesIfEmpty()は「テーブルが空の場合のみ」しか実行されないため、
-// 既にデータが入っている本番DBには効果がなかった（backend-uitestは2026-09-20に
-// 別途この移行を実施済み、本番のみ未対応だった）。
-// 冪等処理：旧6段階の行（sort_order 6件かつ40-50分の金額が1600円）が残っている場合のみ
-// 削除→3段階を再投入する。既に3段階になっていれば何もしない。
-function migrateDriverRewardTo3TierIfLegacy() {
-  const legacyRow = db
-    .prepare("SELECT COUNT(*) as c FROM pricing_rules WHERE rule_type = 'DRIVER_REWARD' AND range_min = 40 AND range_max = 50 AND amount = 1600")
-    .get() as { c: number };
-  if (legacyRow.c === 0) return; // 既に移行済み、または該当データなし
-
-  db.prepare("DELETE FROM pricing_rules WHERE rule_type = 'DRIVER_REWARD'").run();
-
-  const now = new Date().toISOString();
-  const insert = db.prepare(
-    `INSERT INTO pricing_rules (rule_type, unit, range_min, range_max, amount, is_consultation, sort_order, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`
-  );
-  type Rule = [number | null, number | null, number | null, boolean, number];
-  const rows: Rule[] = [
-    [null, 30, 800, false, 1],
-    [30, 50, 1000, false, 2],
-    [50, 60, 1300, false, 3],
-    [60, null, null, true, 4],
-  ];
-  rows.forEach(([min, max, amount, isConsultation, sortOrder]) => {
-    insert.run('DRIVER_REWARD', 'MINUTES', min, max, amount, isConsultation ? 1 : 0, sortOrder, now, now);
-  });
-}
-migrateDriverRewardTo3TierIfLegacy();
-
-// 【2026-09-23・社長承認】最低注文額の41〜50分区分を、誤った¥15,000から
-// 正式確定値¥12,000（2026-09-22社長訂正）へ修正する。冪等処理：該当行が
-// 既に¥12,000になっていれば何も起きない。
-db.exec("UPDATE pricing_rules SET amount = 12000 WHERE rule_type = 'MINIMUM_ORDER' AND range_min = 40 AND range_max = 50 AND amount = 15000");
 
 // accommodations の初期シード（テーブルが空の場合のみ。既存データがあれば一切上書きしない）。
 // index.html の HOTELS 配列（h1〜h10）から id/name/area のみを手動転記したもの

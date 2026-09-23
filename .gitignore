@@ -4,4 +4,8 @@ backend/node_modules/
 backend/.env
 backend/dist/
 backend/data/
+backend-uitest/node_modules/
+backend-uitest/.env
+backend-uitest/dist/
+backend-uitest/data/
 *.log

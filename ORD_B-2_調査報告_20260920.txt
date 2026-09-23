@@ -1,0 +1,276 @@
+ORD B-2 調査報告：商品価格の採用方式・旧方式と新方式の共存・移行方針
+（読み取り専用調査、2026-09-20）
+
+対象指示書：ORD_B-2_product_pricing_migration_investigation.txt
+
+=====================================================
+着手前の確認報告
+=====================================================
+
+1. 読み込んだファイル名：ORD_B-2_product_pricing_migration_investigation.txt
+
+2. 指示内容の要約：
+ORDの旧価格方式（priceCatalog.ts）と新方式（商品マスター）が混在しても、注文金額・
+精算が崩れない構造を読み取り専用で調査する。8項目（価格情報源、ordersテーブル、
+order_line_items実装状況、新旧識別方式の比較、共存・移行方針、精算処理接続、
+checkout/Square連携、推奨案A/B/C）を調査し、最終方式は決定せず候補比較のみ提示する。
+
+3. 実施する作業：
+上記8項目の読み取り専用調査（コード・DB・スキーマの確認）と、11項目形式での報告書作成
+
+4. 実施してはいけない作業：
+コード変更、DB変更、マイグレーション、データ更新・削除・名称変更、本番DBへの書き込み、
+¥400方式（DRIVER_PAYOUT_PER_DELIVERY）への一切の変更・調査対象化、方式の独断決定
+
+5. 不明点・矛盾点：
+指示書は「既存のpriceCatalog方式を使用している既存商品・既存注文が存在する可能性が
+ある」としているが、本番DB・テストDBとも orders テーブルの実データは0件。矛盾では
+なく、指示書作成時点で実データ件数を把握していない可能性があるための事実確認として
+本文中に明記する。
+
+6. 承認が必要な事項：本文末尾（11章）にまとめる。
+
+=====================================================
+1. 調査したファイル名・パス
+=====================================================
+- backend-uitest/src/priceCatalog.ts
+- backend-uitest/src/index.ts
+- backend-uitest/src/db.ts
+- backend-uitest/data/ord.db、backend/data/ord.db（読み取り専用）
+
+=====================================================
+2. 調査したテーブル・カラム・関数・API
+=====================================================
+priceCatalog.PRICE_CATALOG／orders全カラム／order_line_items全カラム・インデックス／
+products／settlements／settlement_items／validateAndRecalculateOrder()／
+insertOrder()／insertOrderLineItem()／getUnsettledStoreLineItems()／
+getUnsettledDriverOrders()／createSettlement()／createSquarePaymentLinkForOrder()
+
+=====================================================
+3. 現在の実装状況
+=====================================================
+
+【1】現在の商品価格の情報源
+- priceCatalog.ts:20-56：PRICE_CATALOG（固定配列、{productId, storeId, name, price}、
+  5店舗30商品）。コード固定値であり、DB保存でもSquare由来でもない。
+- 商品識別キー：productId（例:'p1'）＋storeId（例:'s1'、priceCatalog独自の文字列ID、
+  stores.idの数値とは別軸）
+- Square商品情報との関係：接続なし。priceCatalog.tsはSquare Catalog APIを一切参照しない。
+- 商品マスター（productsテーブル）は別途存在し、product_key（例:'P001'）で識別。
+  priceCatalog.tsとは完全に独立した並行データ源。
+
+【2】ordersテーブルと注文保存内容
+orders全カラム（db.ts確認）：
+  id, square_order_id, items_json, villa_name, room_number, status, store_id, driver_id,
+  created_at, customer_line_id, total_money_json, area, completed_at, display_no,
+  payment_status, payment_attempt_no, payment_link_id,
+  delivery_time_minutes, delivery_fee, minimum_order_amount, driver_reward,
+  remote_dispatch_bonus, estimated_ord_profit,
+  restaurant_to_customer_distance_km, delivery_maps_lookup_status, delivery_maps_lookup_at,
+  driver_to_restaurant_distance_km, remote_maps_lookup_status, remote_maps_lookup_at,
+  accommodation_id, accommodation_latitude, accommodation_longitude, building_villa_number,
+  guest_name, phone_number, delivery_location, delivery_instructions
+
+- items_jsonに保存される商品情報は{name, quantity}のみ（insertOrder()呼び出し時、
+  index.tsのcheckoutハンドラでvalidation.items!.map(i => ({name: i.name,
+  quantity: String(i.quantity)}))として生成）。商品ID・単価・容器代は保存されない。
+- 注文確定時点の価格スナップショット：total_money_jsonに注文合計のみ保存。商品単価の
+  内訳は保存されない。
+- pricing_mode／price_source／catalog_version等の列：存在しない（grepで0件）。
+- 既存注文が後から商品マスター変更の影響を受ける構造か：items_jsonが商品IDすら
+  持たないため、そもそも商品マスターとの紐付け自体が存在せず、「影響を受ける／
+  受けない」という判定の前提が成立しない。
+
+【3】order_line_itemsの実装状況
+CREATE TABLE order_line_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL,
+  product_key TEXT, product_version INTEGER, product_name TEXT NOT NULL,
+  quantity INTEGER NOT NULL, merchant_price INTEGER, container_fee INTEGER,
+  markup_rate REAL, ord_price_unit INTEGER, created_at TEXT NOT NULL
+);
+- インデックス：idx_order_line_items_order_id（通常）のみ。UNIQUE制約・外部キー
+  制約なし。
+- insertOrderLineItem()定義：index.ts:1064-1095。実際の呼び出し箇所：0件
+  （checkoutからは一度も呼ばれていない）。
+- 商品単価・容器代・数量は保存できる構造だが、「加盟店売上」「ORD販売価格合計」
+  自体は列として持たず、computeMerchantSalesUnit()等の関数で都度算出する設計。
+- 既存ordersの金額と重複計上される可能性：現状order_line_itemsは空（0件）のため
+  発生していないが、将来接続後はorders.total_money_json（注文合計）とorder_line_items
+  の合計が別々に集計され得る構造であり、集計経路を分離しないと二重計上リスクがある。
+- 明細が存在しない既存注文への対応：order_line_items側の集計関数
+  （getUnsettledStoreLineItems()等）はorder_line_itemsテーブルを起点にJOINするため、
+  明細がない注文は自動的に集計対象外になる（正の意味で「対応不要」）。
+
+=====================================================
+4. 旧方式と新方式の共存に関する事実
+=====================================================
+【事実確認（矛盾の指摘）】本番DB・テストDBともordersの実データは0件。「既存注文が
+存在する可能性がある」という指示書の前提は、少なくとも現時点のこの2つのDBには
+該当しない。将来的に本番運用が始まった後の話であれば、この調査結果は有効な備えと
+なる。
+
+=====================================================
+5. 二重計上・価格変動・精算不整合のリスク
+=====================================================
+- 旧方式の精算集計（commissionRateForStore()、DRIVER_PAYOUT_PER_DELIVERY）は
+  orders.status/total_money_json/driver_idのみを条件に集計しており、order_line_items
+  の有無を一切考慮しない。
+- 新方式の集計（getUnsettledStoreLineItems()/getUnsettledDriverOrders()）は
+  order_line_items/driver_reward列の存在を条件にする。
+- 両者は判定条件が完全に独立しているため、同一注文が両方式に接続された場合、
+  二重に計上される構造的リスクがある（既報告と同一の結論、今回のスキーマ再確認
+  でも変わらず）。
+- 価格変動リスク：order_line_itemsに保存されるmerchant_price/container_fee/
+  ord_price_unitはINSERT時点の値のスナップショットであり、後からproducts側の
+  Versionが更新されてもorder_line_items側は変化しない設計（テストで確認済み：
+  P001 Version2作成後もVersion1時点の明細値は不変）。
+
+=====================================================
+6. 候補となる設計案と比較（決定なし）
+=====================================================
+
+【新旧識別方式の比較】
+
+方式：注文単位でpricing_mode等を保持
+  正確性：高（注文作成時に一度確定）
+  互換性：高（既存ordersに列追加のみ）
+  精算への影響：旧方式7〜8箇所に除外条件追加が必要
+  保守性：中（列追加＋条件追加）
+  誤判定・二重計上リスク：低
+
+方式：明細単位でpricing_mode等を保持（order_line_items側）
+  正確性：高
+  互換性：中（order_line_itemsは現状注文全体ではなく明細単位のため、注文全体が
+    旧方式か新方式かの判定に使うには工夫が必要）
+  精算への影響：加盟店精算（明細単位）には自然だが、ドライバー精算（注文単位）には
+    不向き
+  保守性：中
+  誤判定・二重計上リスク：中（注文内で明細ごとに方式が混在した場合の扱いが未定義）
+
+方式：商品マスターの存在有無で判定
+  正確性：中（order_line_itemsに1件でもあれば新方式とみなす）
+  互換性：高（新規列不要）
+  精算への影響：既存のorder_line_itemsのJOIN条件をそのまま使える
+  保守性：高（追加スキーマ不要）
+  誤判定・二重計上リスク：中（priceCatalog商品とproducts商品が同一注文に混在した
+    場合の扱いが未定義）
+
+方式：作成日時・移行日時で判定
+  正確性：低（運用上の切替日に依存）
+  互換性：高（コード変更最小）
+  精算への影響：除外条件を日時比較に置き換えるだけ
+  保守性：低（人的運用依存）
+  誤判定・二重計上リスク：高（誰かが誤って旧方式を移行日以降に使うと二重計上を
+    防げない）
+
+いずれも前回・前々回の報告と同一の選択肢であり、新たな案の追加はない
+（重複を避け、比較表としてのみ再整理）。
+
+【共存・移行に関する事実】
+- 既存注文を旧方式として固定できるか：技術的には可能（pricing_mode列にデフォルト
+  値'LEGACY'を設定すればよい設計。現状データ0件のため実施の障害はない）。
+- 商品単位での移行時、同一加盟店内での新旧混在：products.store_idとpriceCatalog
+  のstoreId（文字列）は別軸のキーであるため、技術的には同一加盟店で両方式が混在
+  するデータ構造上の制約はない（ただし業務上の分かりやすさは別問題）。
+- 移行後の価格変更が既存注文へ影響しないか：order_line_itemsのスナップショット
+  設計により影響しないことをテストで確認済み。
+- 既存注文の再計算が必要になる処理：現状存在しない（order_line_itemsの値は作成時
+  に確定し、以後読み取り専用）。
+- 移行期間中のバックアップ・ロールバック・監査ログ：本セッションで一貫して実施
+  している「タイムスタンプ付き.bakファイル」の手法が既存の運用として存在する。
+  専用の監査ログテーブルは存在しない。
+
+【精算処理との接続（既報告の再確認）】
+- 新精算関数はorder_line_items/orders.driver_reward/remote_dispatch_bonusを参照。
+- 旧精算APIはorders.status/total_money_json/driver_idのみを参照。
+- 未精算判定・重複防止：新方式はsettlement_itemsの2本の部分UNIQUEインデックスで
+  実装済み。旧方式には「精算済み」という概念自体が存在しない（都度再計算）。
+
+【checkout・Square連携への影響】
+- checkout時点でSquareへ送られる価格：priceCatalog.tsの固定値のみ（商品マスター・
+  容器代・配送料反映なし）。
+- Square Payment Linkのlineitems：食品明細のみ、配送料・容器代は含まれない。
+- 注文DB保存額との一致：orders.total_money_json（配送費込み）とSquare実請求額
+  （食品代のみ）は現状不一致（既報告の重大な問題、変更なし）。
+- 旧方式・新方式でSquare金額が不一致になる可能性：新方式接続後、products.ord_price
+  ベースの金額とpriceCatalog固定値が混在する注文が発生すれば、Square請求額の
+  算出根拠が注文ごとに異なることになり得る。
+- 価格確定後に商品マスターを変更した場合の影響：order_line_itemsのスナップショット
+  設計により影響を受けない（確認済み）。
+
+【推奨案（実装なし、候補提示のみ）】
+
+候補A：orders.pricing_mode列＋既存7〜8箇所への除外条件追加
+  変更対象：ordersに列追加＋7〜8箇所改修
+  メリット：明確・拡張性高
+  デメリット：改修範囲が広い
+  移行リスク：低
+  精算リスク：低
+
+候補B：order_line_itemsの存在有無で判定（新規列不要）
+  変更対象：既存JOIN条件の流用
+  メリット：新規列不要
+  デメリット：注文内混在時の定義が未確立
+  移行リスク：中
+  精算リスク：中
+
+候補C：期間（作成日時）による運用上の切替
+  変更対象：コード変更最小
+  メリット：実装コスト最小
+  デメリット：システム保証なし
+  移行リスク：高
+  精算リスク：高
+
+採用は社長・専務の承認後に決定する。今回は決定していない。
+
+=====================================================
+7. 未確定事項・矛盾・不足情報
+=====================================================
+- 「既存注文が存在する可能性」という前提と、実データ0件という事実の差異（4章で
+  報告済み）
+- 注文内で新旧商品が混在した場合（候補Bで特に問題化）の扱いルールが未定義
+- 移行期間中の監査ログの要否・仕様
+
+=====================================================
+8. 次に実施すべき調査
+=====================================================
+- 候補A/B/Cのいずれかが承認された場合の、詳細実装設計（前回までのSTEP C-2設計を
+  土台に再確認）
+- TEST GAJIMARUのテストデータ整備要否
+
+=====================================================
+9. コード・DB変更を行っていないことの明記
+=====================================================
+今回の調査は全てSELECT文・ファイル読み取りのみで構成されており、コード変更・
+DB変更は一切行っていない。
+
+=====================================================
+10. 変更していないことを確認できる根拠
+=====================================================
+- git status（backend/）：本セッション開始前から存在する累積差分（過去承認済み
+  フェーズ由来）と完全に同一。新規変更は0件。
+    M backend/.env.example
+    M backend/src/db.ts
+    M backend/src/index.ts
+    ?? backend/src/deliveryRoutePricing.ts
+    ?? backend/src/googleMapsClient.ts
+    ?? backend/src/priceCatalog.ts
+    ?? backend/src/pricingRules.ts
+    ?? backend/src/webhookEvents.ts
+    ?? backend/src/webhookSecurity.ts
+- backend/data/ord.db：タイムスタンプ Sep 14 20:58（変更なし）
+- backend-uitest/data/ord.db：タイムスタンプ Sep 20 13:24（前回承認済みの
+  DRIVER_REWARD修正時点のまま、変更なし）
+
+=====================================================
+11. 社長の承認が必要な事項
+=====================================================
+1. 新旧識別方式（候補A/B/C）のいずれを採用するか
+2. 注文内で新旧商品が混在するケースを許容するか、禁止するか（禁止する場合は
+   既存の「1注文＝1加盟店」制約と同様の仕組みが必要）
+3. 移行期間中の監査ログ機能を新設するか
+4. 「既存注文が存在する可能性」という前提について、実データ0件という現状を
+   踏まえ、いつの時点を想定した設計とするか（今すぐ運用開始する前提か、
+   将来のための備えか）
+
+以上、調査結果のみを報告する。コード・DB・本番環境への変更は一切行っていない。

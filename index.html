@@ -513,10 +513,18 @@ const state = {
   currentRole:'CUSTOMER', // 'CUSTOMER' | 'MERCHANT' | 'DRIVER'（社内検証用デモ切替）
   staffId:null, // 加盟店/配送パートナーの簡易ログイン後にセットされるID（STORES/DRIVER_ACCOUNTSのid）
   hotel:null,
+  staySearchQuery:'', // 宿泊先検索（名称・エリアの部分一致フィルタ、UIのみ）
+  locationNote:'', // 「現在地を使用」ボタン押下後の案内文（宿泊先の自動選択・自動確定は行わない）
+  pendingHotelId:null, // 宿泊先確認画面（stayConfirm）で確定待ちのHOTELS id
   room:'',
   roomType:'',
+  buildingVillaNumber:'', // Phase B-2A: orders.building_villa_number に対応（必須）
   guestName:'',
-  note:'',
+  phoneNumber:'', // Phase B-2A: orders.phone_number に対応（必須）
+  deliveryLocation:'', // Phase B-2A: orders.delivery_location に対応（必須）。'HOTEL_FRONT_DESK'|'VILLA_ENTRANCE'|'ROOM'|'MEETING_POINT'|'OTHER'
+  deliveryLocationOther:'', // deliveryLocation==='OTHER' 選択時の自由記述
+  finalConfirmChecked:false, // 最終確認画面の確認チェックボックス（未チェックの間は決済へ進めない）
+  note:'', // Delivery Instructions（任意）。今回からsubmitCheckout()でdelivery_instructionsとして送信する
   customerLineId:'', // LINE通知を希望する場合のLINE User ID（任意入力）
   couponCode:'',
   appliedCoupon:null, // {code, label, discount}
@@ -529,11 +537,16 @@ const state = {
   myOrderIds:[], // お客様自身が出した注文のid一覧（注文履歴・再注文用）
   favorites:[], // [{storeId, productId}]
   dietaryProfile:{vegan:false, halal:false, glutenFree:false},
-  lang:'ja', // 'ja' | 'en'
+  lang:'en', // 'en' | 'ja'（お客様向けは英語デフォルト。zh/koのi18nデータ自体は残すが今回この画面からは選択不可にする）
   reviews:[], // [{orderId, storeId, rating, comment, createdAt}]
   _reviewDraft:null,
+  checkoutInFlight:false, // Phase A: /api/orders/checkout 応答待ち（Payment Link取得まで）の間true
 };
 let nextOrderLocalId = 1;
+
+// Backend(backend/src/index.ts)のDELIVERY_LOCATIONS参照定数と一致させたコード値。
+// 'OTHER'選択時のみ state.deliveryLocationOther の自由記述をdelivery_locationとして送信する。
+const DELIVERY_LOCATIONS = ['HOTEL_FRONT_DESK','VILLA_ENTRANCE','ROOM','MEETING_POINT','OTHER'];
 
 // ---------- 多言語対応（主要UI文言のみ。メニュー名等の商品データは日本語のまま） ----------
 const I18N = {
@@ -544,6 +557,13 @@ const I18N = {
     selectStay:'ご滞在先を選択', findStore:'この滞在先でお店を探す',
     serviceAreaNote:'サービス開始エリア: 恩納村・北谷町（他エリアは順次拡大予定）',
     noHotelSelected:'滞在先未選択', selectedSuffix:'・選択中',
+    searchStayLabel:'ホテル・ヴィラを検索', searchStayPlaceholder:'施設名やエリアで検索',
+    useCurrentLocationBtn:'📍 現在地を使用', noSearchResults:'該当する宿泊先が見つかりませんでした。',
+    locationCapturedNote:'現在地を取得しました。下記から宿泊先を選択してください。',
+    locationDeniedNote:'現在地を取得できませんでした。下記から宿泊先を選択してください。',
+    locationUnsupportedNote:'このブラウザは現在地機能に対応していません。',
+    headerStayConfirm:'宿泊先の確認', confirmStayQuestion:'こちらの宿泊先でよろしいですか？',
+    confirmStayBtn:'この宿泊先で確定する', backToSearchBtn:'検索に戻る',
     headerStoreList:'お店を選ぶ', headerCart:'カート', headerDelivery:'配送先の入力',
     headerReviewOrder:'注文内容の確認', headerStatus:'注文状況', headerFavorites:'お気に入り',
     headerOrderHistory:'注文履歴', headerProfile:'マイページ',
@@ -556,19 +576,34 @@ const I18N = {
     couponCodeLabel:'クーポンコード（任意）', applyBtn:'適用', couponAppliedSuffix:'を適用しました',
     subtotalLabel:'小計', couponDiscountLabel:'クーポン割引', deliveryFeeLabel:'配送料', totalLabel:'合計',
     enterDeliveryBtn:'配送先を入力する',
-    roomTypeLabel:'部屋タイプ', selectPlaceholder:'選択してください', roomNumberLabel:'部屋番号',
+    roomTypeLabel:'部屋タイプ', selectPlaceholder:'選択してください', roomNumberLabel:'部屋番号（任意）',
     roomNumberPlaceholder:'例：805', deliveryMethodLabel:'お受け取り方法の選択',
     methodFront:'ホテルフロントに預け（推奨）', methodDoor:'お部屋のドア前に置き配', methodHand:'お部屋で直接手渡し',
     frontNotice:'ℹ️ フロントスタッフがお預かりし、ご到着まで保管いたします。お名前でお呼び出しいたしますので、フロントにお声がけください。',
-    guestNameLabel:'お名前', guestNamePlaceholder:'例：山田 太郎',
-    noteLabel:'メモ入力欄（任意）', notePlaceholder:'例：フロント預け名義：サトウ／ドア前到着時にベルを鳴らしてください',
+    buildingVillaLabel:'建物名・ヴィラ番号（必須）', buildingVillaPlaceholder:'例：ヴィラC棟／Building 3',
+    guestNameLabel:'お名前（必須）', guestNamePlaceholder:'例：山田 太郎',
+    phoneLabel:'電話番号（必須）', phonePlaceholder:'例：090-1234-5678',
+    phoneNotice:'ℹ️ お届け時にご連絡する場合がございます。',
+    deliveryLocationLabel:'お届け場所（必須）', deliveryLocationOtherPlaceholder:'具体的な場所をご記入ください',
+    deliveryLocation_HOTEL_FRONT_DESK:'ホテルフロント', deliveryLocation_VILLA_ENTRANCE:'ヴィラの入口',
+    deliveryLocation_ROOM:'客室', deliveryLocation_MEETING_POINT:'待ち合わせ場所', deliveryLocation_OTHER:'その他',
+    noteLabel:'配達に関するご要望（任意）', notePlaceholder:'例：ドア前到着時にベルを鳴らしてください',
     lineIdLabel:'LINE通知を受け取る（任意）', lineIdPlaceholder:'LINEユーザーIDをお持ちの場合はご入力ください',
     lineIdNotice:'ℹ️ ご入力いただくと、調理開始・お届け完了のタイミングでLINEにお知らせをお送りします（任意・未入力でもご注文いただけます）。',
     confirmOrderBtn:'注文内容を確認する',
     alertNoHotel:'滞在先ホテルが選択されていません。', alertNoRoomType:'部屋タイプを選択してください。', alertNoRoom:'部屋番号を入力してください。',
+    alertNoBuildingVilla:'建物名・ヴィラ番号を入力してください。', alertNoGuestName:'お名前を入力してください。',
+    alertNoPhone:'電話番号を入力してください。', alertNoDeliveryLocation:'お届け場所を選択してください。',
+    alertNoDeliveryLocationOther:'お届け場所を具体的にご記入ください。',
     deliveryDestLabel:'お届け先', roomLabel:'部屋', nameLabel:'お名前', notEntered:'（未入力）',
-    receiveMethodLabel:'受け取り方法', memoLabel:'メモ', totalAmountLabel:'合計金額',
+    buildingVillaSummaryLabel:'建物名・ヴィラ番号', phoneSummaryLabel:'電話番号', deliveryLocationSummaryLabel:'お届け場所',
+    receiveMethodLabel:'受け取り方法', memoLabel:'配達に関するご要望', totalAmountLabel:'合計金額',
+    accessNoticeTitle:'お届けにあたっての注意事項',
+    accessNoticeText:'配達員がお届け場所へ到着した際にお受け取りいただけるよう、ご滞在中はお電話にご対応いただきますようお願いいたします。指定のお届け場所でお受け取りが確認できない場合、配達員よりご登録の電話番号へご連絡する場合がございます。',
+    finalConfirmCheckboxLabel:'上記の内容に間違いがないことを確認しました',
+    alertNoFinalConfirm:'内容確認のチェックボックスにチェックを入れてください。',
     confirmPlaceOrderBtn:'この内容で注文を確定する', editDeliveryBtn:'配送先を修正する',
+    checkoutProcessing:'決済ページへ移動しています…', checkoutFailedGeneric:'注文の送信に失敗しました。しばらくしてから再度お試しください。',
     thankYouTitle:'ご注文ありがとうございます！', orderedStoreLabel:'ご注文店舗', orderedQtyLabel:'ご注文点数',
     pointsUnit:'点', estDeliveryTimeLabel:'予想お届け時間', estDeliveryValue:'25〜40分',
     checkStatusBtn:'配達状況を確認する', backToTopBtn:'トップへ戻る',
@@ -592,6 +627,13 @@ const I18N = {
     selectStay:'Select your stay', findStore:'Browse restaurants for this stay',
     serviceAreaNote:'Service area: Onna & Chatan (more areas coming soon)',
     noHotelSelected:'No stay selected', selectedSuffix:' · Selected',
+    searchStayLabel:'Search your hotel or villa', searchStayPlaceholder:'Search by name or area',
+    useCurrentLocationBtn:'📍 Use current location', noSearchResults:'No matching accommodations found.',
+    locationCapturedNote:'Location captured. Please select your accommodation below.',
+    locationDeniedNote:'We couldn\'t access your location. Please select your accommodation below.',
+    locationUnsupportedNote:'Current location is not supported on this browser.',
+    headerStayConfirm:'Confirm your stay', confirmStayQuestion:'Is this your accommodation?',
+    confirmStayBtn:'Confirm this accommodation', backToSearchBtn:'Back to search',
     headerStoreList:'Choose a restaurant', headerCart:'Cart', headerDelivery:'Delivery details',
     headerReviewOrder:'Review your order', headerStatus:'Order status', headerFavorites:'Favorites',
     headerOrderHistory:'Order history', headerProfile:'Profile',
@@ -604,19 +646,34 @@ const I18N = {
     couponCodeLabel:'Coupon code (optional)', applyBtn:'Apply', couponAppliedSuffix:' applied',
     subtotalLabel:'Subtotal', couponDiscountLabel:'Coupon discount', deliveryFeeLabel:'Delivery fee', totalLabel:'Total',
     enterDeliveryBtn:'Enter delivery details',
-    roomTypeLabel:'Room type', selectPlaceholder:'Please select', roomNumberLabel:'Room number',
+    roomTypeLabel:'Room type', selectPlaceholder:'Please select', roomNumberLabel:'Room number (optional)',
     roomNumberPlaceholder:'e.g. 805', deliveryMethodLabel:'Delivery method',
     methodFront:'Leave at hotel front desk (recommended)', methodDoor:'Leave at room door', methodHand:'Hand directly to guest',
     frontNotice:'ℹ️ Front desk staff will hold your order until you arrive. Please ask at the front desk under your name.',
-    guestNameLabel:'Name', guestNamePlaceholder:'e.g. John Smith',
-    noteLabel:'Note (optional)', notePlaceholder:'e.g. Front desk name: Smith / Please ring the bell at the door',
+    buildingVillaLabel:'Building / Villa Number (required)', buildingVillaPlaceholder:'e.g. Villa C / Building 3',
+    guestNameLabel:'Name (required)', guestNamePlaceholder:'e.g. John Smith',
+    phoneLabel:'Phone Number (required)', phonePlaceholder:'e.g. 090-1234-5678',
+    phoneNotice:'ℹ️ We may contact you at delivery time.',
+    deliveryLocationLabel:'Where should we deliver? (required)', deliveryLocationOtherPlaceholder:'Please specify the location',
+    deliveryLocation_HOTEL_FRONT_DESK:'Hotel Front Desk', deliveryLocation_VILLA_ENTRANCE:'Villa Entrance',
+    deliveryLocation_ROOM:'Room', deliveryLocation_MEETING_POINT:'Meeting Point', deliveryLocation_OTHER:'Other',
+    noteLabel:'Delivery Instructions (optional)', notePlaceholder:'e.g. Please ring the bell at the door',
     lineIdLabel:'Receive LINE notifications (optional)', lineIdPlaceholder:'Enter your LINE user ID if you have one',
     lineIdNotice:'ℹ️ If entered, we\'ll send you a LINE message when cooking starts and when your order is delivered (optional).',
     confirmOrderBtn:'Review order',
     alertNoHotel:'Please select your hotel first.', alertNoRoomType:'Please select a room type.', alertNoRoom:'Please enter your room number.',
+    alertNoBuildingVilla:'Please enter your building / villa number.', alertNoGuestName:'Please enter your name.',
+    alertNoPhone:'Please enter your phone number.', alertNoDeliveryLocation:'Please select a delivery location.',
+    alertNoDeliveryLocationOther:'Please specify the delivery location.',
     deliveryDestLabel:'Delivery to', roomLabel:'Room', nameLabel:'Name', notEntered:'(not entered)',
-    receiveMethodLabel:'Delivery method', memoLabel:'Note', totalAmountLabel:'Total amount',
+    buildingVillaSummaryLabel:'Building / Villa', phoneSummaryLabel:'Phone', deliveryLocationSummaryLabel:'Delivery location',
+    receiveMethodLabel:'Delivery method', memoLabel:'Delivery instructions', totalAmountLabel:'Total amount',
+    accessNoticeTitle:'Delivery Access Notice',
+    accessNoticeText:'Please make sure you are reachable by phone while your order is out for delivery. If our driver cannot confirm your presence at the delivery location, they may contact you at the phone number you provided.',
+    finalConfirmCheckboxLabel:'I confirm the information above is correct',
+    alertNoFinalConfirm:'Please check the confirmation box before continuing.',
     confirmPlaceOrderBtn:'Place order', editDeliveryBtn:'Edit delivery details',
+    checkoutProcessing:'Redirecting to secure payment…', checkoutFailedGeneric:'Failed to submit your order. Please try again in a moment.',
     thankYouTitle:'Thank you for your order!', orderedStoreLabel:'Restaurant', orderedQtyLabel:'Items ordered',
     pointsUnit:' items', estDeliveryTimeLabel:'Estimated delivery time', estDeliveryValue:'25–40 min',
     checkStatusBtn:'Check delivery status', backToTopBtn:'Back to top',
@@ -665,6 +722,7 @@ const I18N = {
     deliveryDestLabel:'配送地址', roomLabel:'房间', nameLabel:'姓名', notEntered:'（未填写）',
     receiveMethodLabel:'取餐方式', memoLabel:'备注', totalAmountLabel:'总金额',
     confirmPlaceOrderBtn:'确认下单', editDeliveryBtn:'修改配送信息',
+    checkoutProcessing:'正在跳转到支付页面…', checkoutFailedGeneric:'订单提交失败，请稍后重试。',
     thankYouTitle:'感谢您的订购！', orderedStoreLabel:'订购餐厅', orderedQtyLabel:'订购件数',
     pointsUnit:'件', estDeliveryTimeLabel:'预计送达时间', estDeliveryValue:'25〜40分钟',
     checkStatusBtn:'查看配送状态', backToTopBtn:'返回首页',
@@ -713,6 +771,7 @@ const I18N = {
     deliveryDestLabel:'배송지', roomLabel:'객실', nameLabel:'성함', notEntered:'(미입력)',
     receiveMethodLabel:'수령 방법', memoLabel:'메모', totalAmountLabel:'총 금액',
     confirmPlaceOrderBtn:'이 내용으로 주문 확정', editDeliveryBtn:'배송지 수정',
+    checkoutProcessing:'결제 페이지로 이동 중…', checkoutFailedGeneric:'주문 전송에 실패했습니다. 잠시 후 다시 시도해 주세요.',
     thankYouTitle:'주문해 주셔서 감사합니다!', orderedStoreLabel:'주문 매장', orderedQtyLabel:'주문 수량',
     pointsUnit:'개', estDeliveryTimeLabel:'예상 배달 시간', estDeliveryValue:'25~40분',
     checkStatusBtn:'배달 현황 확인하기', backToTopBtn:'홈으로 돌아가기',
@@ -837,7 +896,9 @@ function makeOrderNo(){
   return `ORD-${ymd}-${rand}`;
 }
 
-function placeOrder(){
+async function placeOrder(){
+  if (state.checkoutInFlight) return; // 二重クリック防止
+  if (!state.finalConfirmChecked) { alert(t('alertNoFinalConfirm')); return; } // ボタンdisabled回避時の保険
   const store = getStore(cartStoreId());
   const subtotal = cartTotal();
   const discount = couponDiscountAmount(subtotal);
@@ -852,7 +913,11 @@ function placeOrder(){
     hotel: state.hotel,
     room: state.room,
     roomType: state.roomType,
+    buildingVillaNumber: state.buildingVillaNumber,
     guestName: state.guestName,
+    phoneNumber: state.phoneNumber,
+    deliveryLocation: state.deliveryLocation,
+    deliveryLocationOther: state.deliveryLocationOther,
     storeId: cartStoreId(),
     storeName: store ? store.name : '',
     createdAt: new Date(),
@@ -865,47 +930,77 @@ function placeOrder(){
     delayStatus: null, // {active, ack, message, minutes}
     reviewed: false,
   };
-  state.orders.push(order);
-  state.myOrderIds.push(order.id);
-  syncOrderToBackend(order);
-  state.cart = [];
-  state.couponCode = '';
-  state.appliedCoupon = null;
-  goTo('confirm');
+
+  state.checkoutInFlight = true;
+  render();
+  try {
+    const { httpOk, data } = await submitCheckout(order);
+    if (httpOk && data && data.ok && data.paymentLinkUrl) {
+      // backendが発行した正式なORD Order ID（backend側orders.id）を紐付けて保持しておく。
+      // 既存の order.no（表示用注文番号）や order.id（フロント内部id）は変更・削除しない。
+      order.backendOrderId = data.orderId;
+      state.orders.push(order);
+      state.myOrderIds.push(order.id);
+      state.cart = [];
+      state.couponCode = '';
+      state.appliedCoupon = null;
+      // 【重要】ここではまだ「注文完了」ではない。決済はこれから顧客がSquare決済ページで
+      // 行うものであり、正式な決済完了判定はSquare Webhook経由のpayment_statusのみを
+      // 基準とする。このリダイレクトはあくまで「決済ページへの遷移」であり、
+      // redirect自体をもって決済完了とみなしてはならない。
+      window.location.href = data.paymentLinkUrl;
+      return;
+    }
+    state.checkoutInFlight = false;
+    const errorMessage = (data && data.error) ? data.error : t('checkoutFailedGeneric');
+    alert(errorMessage);
+    render();
+  } catch (err) {
+    state.checkoutInFlight = false;
+    alert(t('checkoutFailedGeneric'));
+    render();
+    console.log('[ORD] checkout失敗:', err.message);
+  }
 }
 
-// ---------- バックエンド連携（backend/server.js、Square Webhook相当のエンドポイントへ送信） ----------
-// ローカルでバックエンドを起動していない場合は失敗して当然なので、失敗してもお客様側の
-// 注文フロー自体は止めない（ベストエフォート・非同期のfire-and-forget）。
+// ---------- バックエンド連携（Phase A：正式な注文受付API /api/orders/checkout） ----------
+// 【重要】旧 /webhooks/square への送信（fire-and-forget）は廃止した。/webhooks/square は
+// 今後Squareからの決済通知専用エンドポイントであり、顧客の注文作成には使用しない。
+// 正式な決済確定（payment_status=COMPLETED）はSquare Webhook経由でのみ行われるため、
+// このAPI呼び出し自体は「注文の登録とPayment Linkの発行」までしか担わない。
+// そのため、この関数の完了(Payment Link取得)を待ってから顧客をSquare決済ページへ
+// 遷移させる必要があり、以前のようなfire-and-forgetにはできない（呼び出し元でawaitする）。
 const BACKEND_URL = 'http://localhost:3001';
-function syncOrderToBackend(order){
+async function submitCheckout(order){
   const payload = {
-    type: 'order.created',
-    data: {
-      object: {
-        order: {
-          id: order.no,
-          note: `ヴィラ名:${order.hotel ? order.hotel.name : ''} / 部屋番号:${order.roomType} ${order.room}`,
-          line_items: order.items.map(i => ({
-            name: i.product ? i.product.name : '(不明)',
-            quantity: String(i.qty),
-            modifiers: [],
-          })),
-          customer_line_id: state.customerLineId || null,
-          total_money: { amount: order.total + 300, currency: 'JPY' },
-          area: order.hotel ? order.hotel.area : null,
-        },
-      },
-    },
+    display_no: order.no,
+    note: `ヴィラ名:${order.hotel ? order.hotel.name : ''} / 部屋番号:${order.roomType} ${order.room}`,
+    line_items: order.items.map(i => ({
+      name: i.product ? i.product.name : '(不明)',
+      quantity: String(i.qty),
+      modifiers: [],
+    })),
+    customer_line_id: state.customerLineId || null,
+    // Backend側で商品マスタから再計算されるため、ここでの金額は参考値でしかなく、
+    // Squareへの実際の請求額としては使用されない（Backend再計算値のみが正式金額）。
+    total_money: { amount: order.total + 300, currency: 'JPY' },
+    area: order.hotel ? order.hotel.area : null,
+    // Phase B-2A/B-2: 宿泊先・配送先情報。accommodation_idはHOTELS.id（'h1'〜'h10'）をそのまま送信し、
+    // Backend側でaccommodations.idと突き合わせて検証する（座標検証等はBackend側の責務、フロントでは推測・補正しない）。
+    accommodation_id: order.hotel ? order.hotel.id : null,
+    building_villa_number: order.buildingVillaNumber,
+    guest_name: order.guestName,
+    phone_number: order.phoneNumber,
+    delivery_location: order.deliveryLocation === 'OTHER' ? order.deliveryLocationOther : order.deliveryLocation,
+    delivery_instructions: order.note ? order.note : null,
   };
-  fetch(`${BACKEND_URL}/webhooks/square`, {
+  const res = await fetch(`${BACKEND_URL}/api/orders/checkout`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify(payload),
-  })
-    .then(r => r.json())
-    .then(data => console.log('[ORD] バックエンド連携 成功:', data))
-    .catch(err => console.log('[ORD] バックエンド連携 失敗（backendが起動していない場合は正常です）:', err.message));
+  });
+  const data = await res.json().catch(() => null);
+  return { httpOk: res.ok, data };
 }
 
 // ---------- 加盟店様：調理カウントダウン（複数注文対応、注文ごとに独立したタイマー） ----------
@@ -1019,8 +1114,14 @@ function renderTop(){
           <div><div class="hn">${state.hotel.name}</div><div class="ha">${state.hotel.area}・選択中</div></div>
         </div>
       ` : ''}
-      ${HOTELS.map(h=>`
-        <div class="hotel-card ${state.hotel&&state.hotel.id===h.id?'selected':''}" onclick="selectHotel('${h.id}')">
+      <div class="field">
+        <label>${t('searchStayLabel')}</label>
+        <input type="text" placeholder="${t('searchStayPlaceholder')}" value="${state.staySearchQuery}" oninput="state.staySearchQuery=this.value;render();">
+      </div>
+      <button class="cta secondary" style="margin-bottom:14px;" onclick="useCurrentLocation()">${t('useCurrentLocationBtn')}</button>
+      ${state.locationNote ? `<div class="notice-box" style="margin-bottom:14px;">${state.locationNote}</div>` : ''}
+      ${filteredHotelsForTop().length===0 ? `<div class="notice-box">${t('noSearchResults')}</div>` : filteredHotelsForTop().map(h=>`
+        <div class="hotel-card ${state.hotel&&state.hotel.id===h.id?'selected':''}" onclick="previewHotel('${h.id}')">
           <div class="hotel-thumb">${h.icon}</div>
           <div class="hotel-info">
             <div class="name">${h.name}</div>
@@ -1033,7 +1134,50 @@ function renderTop(){
     </div>
   `;
 }
+// 宿泊先検索（名称・エリアの部分一致、UIのみのフィルタでHOTELSデータ自体は変更しない）
+function filteredHotelsForTop(){
+  const q = (state.staySearchQuery||'').trim().toLowerCase();
+  if(!q) return HOTELS;
+  return HOTELS.filter(h => h.name.toLowerCase().includes(q) || h.area.toLowerCase().includes(q));
+}
+// 「現在地を使用」：ブラウザ標準のgeolocationのみ使用（Google API等の外部通信は行わない）。
+// 取得できても宿泊先の自動選択・自動確定は一切行わず、案内メッセージを表示するのみ。
+function useCurrentLocation(){
+  if(!navigator.geolocation){ state.locationNote = t('locationUnsupportedNote'); render(); return; }
+  navigator.geolocation.getCurrentPosition(
+    () => { state.locationNote = t('locationCapturedNote'); render(); },
+    () => { state.locationNote = t('locationDeniedNote'); render(); }
+  );
+}
+function previewHotel(id){ state.pendingHotelId = id; goTo('stayConfirm'); }
 function selectHotel(id){ state.hotel = HOTELS.find(h=>h.id===id); state.roomType=''; render(); }
+
+function renderStayConfirm(){
+  const h = HOTELS.find(x=>x.id===state.pendingHotelId);
+  if(!h) return renderEmpty('📍', t('noHotelSelected'), 'top', t('backToSearchBtn'));
+  return `
+    ${Header(t('headerStayConfirm'), {backTo:'top', hideCart:true})}
+    <div class="section">
+      <div class="hotel-card selected" style="cursor:default;">
+        <div class="hotel-thumb">${h.icon}</div>
+        <div class="hotel-info">
+          <div class="name">${h.name}</div>
+          <div class="area">${h.area}</div>
+          <div class="feat">${h.feature}</div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-sub);margin:14px 0;">${t('confirmStayQuestion')}</p>
+      <button class="cta" onclick="confirmHotelSelection()">${t('confirmStayBtn')}</button>
+      <button class="cta secondary" onclick="state.pendingHotelId=null;goTo('top');">${t('backToSearchBtn')}</button>
+    </div>
+  `;
+}
+function confirmHotelSelection(){
+  if(!state.pendingHotelId) { goTo('top'); return; }
+  selectHotel(state.pendingHotelId);
+  state.pendingHotelId = null;
+  goTo('top');
+}
 
 function renderStoreList(){
   const genres = ['すべて', ...new Set(STORES.map(s=>s.genre))];
@@ -1214,8 +1358,31 @@ function renderDelivery(){
         </select>
       </div>
       <div class="field">
+        <label>${t('buildingVillaLabel')}</label>
+        <input type="text" placeholder="${t('buildingVillaPlaceholder')}" value="${state.buildingVillaNumber}" oninput="state.buildingVillaNumber=this.value">
+      </div>
+      <div class="field">
         <label>${t('roomNumberLabel')}</label>
         <input type="text" placeholder="${t('roomNumberPlaceholder')}" value="${state.room}" oninput="state.room=this.value">
+      </div>
+      <div class="field">
+        <label>${t('guestNameLabel')}</label>
+        <input type="text" placeholder="${t('guestNamePlaceholder')}" value="${state.guestName}" oninput="state.guestName=this.value">
+      </div>
+      <div class="field">
+        <label>${t('phoneLabel')}</label>
+        <input type="tel" placeholder="${t('phonePlaceholder')}" value="${state.phoneNumber}" oninput="state.phoneNumber=this.value">
+        <div class="notice-box">${t('phoneNotice')}</div>
+      </div>
+      <div class="field">
+        <label>${t('deliveryLocationLabel')}</label>
+        <select onchange="state.deliveryLocation=this.value;render();">
+          <option value="">${t('selectPlaceholder')}</option>
+          ${DELIVERY_LOCATIONS.map(v=>`<option value="${v}" ${state.deliveryLocation===v?'selected':''}>${t('deliveryLocation_'+v)}</option>`).join('')}
+        </select>
+        ${state.deliveryLocation==='OTHER' ? `
+          <input type="text" style="margin-top:8px;" placeholder="${t('deliveryLocationOtherPlaceholder')}" value="${state.deliveryLocationOther}" oninput="state.deliveryLocationOther=this.value">
+        ` : ''}
       </div>
       <div class="field">
         <label>${t('deliveryMethodLabel')}</label>
@@ -1228,10 +1395,6 @@ function renderDelivery(){
           `).join('')}
         </div>
         ${state.deliveryMethod==='front' ? `<div class="notice-box">${t('frontNotice')}</div>` : ''}
-      </div>
-      <div class="field">
-        <label>${t('guestNameLabel')}</label>
-        <input type="text" placeholder="${t('guestNamePlaceholder')}" value="${state.guestName}" oninput="state.guestName=this.value">
       </div>
       <div class="field">
         <label>${t('noteLabel')}</label>
@@ -1249,7 +1412,12 @@ function renderDelivery(){
 function tryConfirmOrder(){
   if(!state.hotel){ alert(t('alertNoHotel')); return; }
   if(!state.roomType){ alert(t('alertNoRoomType')); return; }
-  if(!state.room){ alert(t('alertNoRoom')); return; }
+  if(!state.buildingVillaNumber || !state.buildingVillaNumber.trim()){ alert(t('alertNoBuildingVilla')); return; }
+  if(!state.guestName || !state.guestName.trim()){ alert(t('alertNoGuestName')); return; }
+  if(!state.phoneNumber || !state.phoneNumber.trim()){ alert(t('alertNoPhone')); return; }
+  if(!state.deliveryLocation){ alert(t('alertNoDeliveryLocation')); return; }
+  if(state.deliveryLocation==='OTHER' && (!state.deliveryLocationOther || !state.deliveryLocationOther.trim())){ alert(t('alertNoDeliveryLocationOther')); return; }
+  state.finalConfirmChecked = false; // 配送先を修正して戻ってきた場合に再確認させるため、レビュー画面に入るたび未チェックへ戻す
   goTo('reviewOrder');
 }
 
@@ -1262,8 +1430,11 @@ function renderReviewOrder(){
     <div class="section">
       <div class="receipt" style="margin:0 0 14px;">
         <div class="line"><span>${t('deliveryDestLabel')}</span><b>${state.hotel.name}</b></div>
-        <div class="line"><span>${t('roomLabel')}</span><b>${state.roomType} / ${state.room}号室</b></div>
+        <div class="line"><span>${t('buildingVillaSummaryLabel')}</span><b>${state.buildingVillaNumber}</b></div>
+        <div class="line"><span>${t('roomLabel')}</span><b>${state.roomType}${state.room?` / ${state.room}`:''}</b></div>
         <div class="line"><span>${t('nameLabel')}</span><b>${state.guestName||t('notEntered')}</b></div>
+        <div class="line"><span>${t('phoneSummaryLabel')}</span><b>${state.phoneNumber||t('notEntered')}</b></div>
+        <div class="line"><span>${t('deliveryLocationSummaryLabel')}</span><b>${state.deliveryLocation==='OTHER' ? state.deliveryLocationOther : t('deliveryLocation_'+state.deliveryLocation)}</b></div>
         <div class="line"><span>${t('receiveMethodLabel')}</span><b>${deliveryMethodLabel(state.deliveryMethod)}</b></div>
         ${state.note?`<div class="line"><span>${t('memoLabel')}</span><b>${state.note}</b></div>`:''}
       </div>
@@ -1275,7 +1446,14 @@ function renderReviewOrder(){
       ${state.appliedCoupon?`<div class="summary-row"><span>${t('couponDiscountLabel')}（${state.appliedCoupon.label}）</span><span>-${formatYen(couponDiscountAmount(cartTotal()))}</span></div>`:''}
       <div class="summary-row"><span>${t('deliveryFeeLabel')}</span><span>${formatYen(300)}</span></div>
       <div class="summary-row total"><span>${t('totalAmountLabel')}</span><span>${formatYen(Math.max(0,cartTotal()-couponDiscountAmount(cartTotal()))+300)}</span></div>
-      <button class="cta" onclick="placeOrder()">${t('confirmPlaceOrderBtn')}</button>
+      <div class="notice-box" style="margin-top:14px;">
+        <b>${t('accessNoticeTitle')}</b><br>${t('accessNoticeText')}
+      </div>
+      <label class="radio-row" style="margin:12px 0;">
+        <input type="checkbox" ${state.finalConfirmChecked?'checked':''} onchange="state.finalConfirmChecked=this.checked;render();">
+        <span>${t('finalConfirmCheckboxLabel')}</span>
+      </label>
+      <button class="cta" onclick="placeOrder()" ${(state.checkoutInFlight||!state.finalConfirmChecked)?'disabled':''}>${state.checkoutInFlight ? t('checkoutProcessing') : t('confirmPlaceOrderBtn')}</button>
       <button class="cta secondary" onclick="goTo('delivery')">${t('editDeliveryBtn')}</button>
     </div>
   `;
@@ -1568,10 +1746,8 @@ function renderProfile(){
       </div>
       <div class="section-title">${t('languageTitle')}</div>
       <div class="chip-row">
-        <div class="chip ${state.lang==='ja'?'active':''}" onclick="setLang('ja')">日本語</div>
         <div class="chip ${state.lang==='en'?'active':''}" onclick="setLang('en')">English</div>
-        <div class="chip ${state.lang==='zh'?'active':''}" onclick="setLang('zh')">中文</div>
-        <div class="chip ${state.lang==='ko'?'active':''}" onclick="setLang('ko')">한국어</div>
+        <div class="chip ${state.lang==='ja'?'active':''}" onclick="setLang('ja')">日本語</div>
       </div>
     </div>
   `;
@@ -1583,6 +1759,7 @@ const SCREENS = {
   storeDetail: renderStoreDetail,
   productDetail: renderProductDetail,
   cart: renderCart,
+  stayConfirm: renderStayConfirm,
   delivery: renderDelivery,
   reviewOrder: renderReviewOrder,
   confirm: renderConfirm,

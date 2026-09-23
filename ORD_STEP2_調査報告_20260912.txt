@@ -1,0 +1,159 @@
+【ORD STEP2｜ドライバー登録・配車基盤 実装前 現状調査報告書】
+作成日：2026年9月12日
+作成者：Claude部長
+種別：調査報告のみ（コード・データの変更は一切行っていません）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+最重要の結論
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+指示書に記載の想定システム構成（Google Sheets／Google Apps Script）と、
+実際にプロジェクト内に存在するシステム構成（SQLite／Node.js+Express+TypeScript）は
+根本的に異なります。事実を優先し、実態をそのまま以下に報告します。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A. 現在のシステム構成（実態）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+お客様アプリ（index.html、単一HTMLファイル、GitHub Pages配信）
+  │
+  │　※注文確定時のみ、一方向のfire-and-forget HTTP POSTでbackendへ送信
+  ▼
+Backend（Node.js + Express + TypeScript／backend/src/index.ts）
+  │
+  ├─ SQLite（backend/data/ord.db、node:sqlite使用）★Google Sheetsではない
+  ├─ Square SDK（モック動作、実トークン未設定）
+  ├─ LINE Messaging API SDK（モック動作、実トークン未設定）
+  └─ Leaflet + OpenStreetMap（Google Maps APIキー未設定のため代替使用）
+  │
+  ▼
+管理画面（/admin、backend内でサーバーサイドレンダリング、JWT+Cookieログイン必須）
+
+【重要な別系統】
+index.html内の「加盟店様」「配送パートナー」画面は、上記backendと接続されていない
+フロントエンド内だけの疑似シミュレーションです（DRIVER_ACCOUNTSという別のハードコード
+されたモックデータを使用）。お客様の注文作成だけが一方向でbackendに届きますが、
+加盟店様/配送パートナーの操作（受託・配達完了等）はフロントのstateだけで完結しており、
+backendには一切反映されません。
+
+Google Sheets／Google Apps Scriptは、プロジェクト内・Desktop内のどこにも
+存在しません（.gsファイル、appsscript.json、SpreadsheetApp等のキーワードを
+検索しましたが該当なし）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B. 現在存在する機能
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+機能 / 状態 / 使用ファイル / 備考
+
+お客様注文フロー（8画面+追加10機能）/ 実装済み / index.html / フロント完結
+加盟店様・配送パートナー画面（フロント側）/ 実装済み（疑似）/ index.html / backend未接続
+Square Webhook受信 / 実装済み（モック）/ backend/src/index.ts / 実トークン未設定
+LINE通知（Flex Message）/ 実装済み（モック）/ backend/src/index.ts / 実トークン未設定
+管理画面（/admin）/ 実装済み / backend/src/index.ts / ログイン必須
+データ永続化 / 実装済み / backend/src/db.ts / SQLite（Google Sheetsではない）
+認証（ADMIN/STORE/DRIVER）/ 実装済み / backend/src/auth.ts / JWT + bcrypt
+自動配車候補表示 / 実装済み（簡易）/ backend/src/index.ts / エリア名一致ベース
+KPI/分析/地図/運営アラート / 実装済み / backend/src/index.ts / -
+精算CSV/PDF出力 / 実装済み / backend/src/index.ts / pdfkit使用
+
+Google Sheets連携 / 未実装 / 該当ファイルなし / -
+Google Apps Script / 未実装 / 該当ファイルなし / -
+Google Maps API（本物）/ 未実装 / 該当ファイルなし / APIキー未取得
+二重受託防止 / 未実装 / - / 詳細はG章
+配送完了の権限チェック / 未実装 / - / 詳細はH章
+LINE Webhook署名検証 / 未実装 / - / README既知の注意事項
+LINE postbackの送信者識別 / 未実装 / - / event.source.userId未使用
+Product Master（backend側）/ 未作成 / - / 商品データはindex.htmlのSTORES配列のみ
+Settlement Master（永続記録）/ 未作成 / - / 精算は都度計算のみ
+System Settings / 未作成 / - / 定数はコード内にハードコード
+操作ログ・エラーログ / 未作成 / - / console.log/errorのみ、永続化なし
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+C. Driver関連
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Driver Master：SQLiteのdriversテーブルとして存在（Google Sheetsではない）
+Driver ID：backend=SQLite AUTOINCREMENT整数／フロント=別に'd1'〜'd3'固定文字列（両者は統合されていない別物）
+登録フォーム：/admin画面に存在（名前・LINE User ID・エリア・ログインID/パスワード）
+管理画面：一覧表示・新規登録は可能。編集・削除・無効化のUIは未実装
+LINE：lineUserId列を保持し、実際にFlex Message送信ロジックも存在（モック動作）
+Available（ON/OFF）：未実装（status列はIDLE/BUSYの2値のみでシステムが自動更新。手動トグルなし）
+配送エリア：area列として実装済み（自由入力文字列、座標変換は恩納村・読谷村・名護市・北谷町の4種類のみ対応）
+配送可能時間：未実装（曜日・時間帯による稼働可否という概念自体が存在しない）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+D. STEP2で新しく必要なもの
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【再利用できるもの】
+・backend/src/db.tsのdriversテーブル、Driver型、insertDriver()/getAllDrivers()等のCRUD関数
+・backend/src/auth.tsのJWT+bcryptログイン基盤（requireAuth('DRIVER')は精算閲覧で稼働中）
+・buildDriverFlex()（LINE Flex Message構築パターン。将来の「配送案件カード」拡張の土台）
+・/adminのカードUI・ダークモード・レスポンシブデザイン
+・rankDriverCandidates()（候補の並び順ロジック。ただし「一斉配信→早い者勝ち」への拡張が別途必要）
+
+【追加が必要】
+・Driver Masterへの列追加：稼働可否（available）、配送可能時間帯、（必要なら）緯度経度の実座標
+・LINE Webhookの送信者識別：event.source.userIdをorderの担当driverIdのlineUserIdと突合する処理（現状は一切行われていない）
+・LINE Webhook署名検証（x-line-signature）
+・二重受託防止のための排他制御された受託確定処理
+・配送完了操作の権限チェック（担当外ドライバー拒否・二重完了拒否）
+・複数ドライバーへ同一案件を一斉配信する仕組み
+・Product Master（backend側に商品マスタが存在しない）
+・Order IDの一本化（E章参照）
+
+【変更候補（今回は変更していません、次回検討用）】
+・app.post('/webhooks/line', ...)（backend/src/index.ts 1511行目付近）— 送信者識別・排他制御・権限チェックの追加が必要
+・POST /api/orders/:id/dispatch（同1475行目付近）— 現状「管理者が1人を選んで手配」という設計。「複数候補への一斉送信」モデルへ拡張するなら設計変更が必要
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+E. 既存システムへの影響（将来変更時の想定）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+対象ファイル：backend/src/index.ts（LINE Webhook・dispatch部分）、backend/src/db.ts（drivers/ordersテーブルへの列追加）
+対象シート：該当なし（Google Sheetsが存在しないため。実体はSQLiteのdrivers/ordersテーブル）
+対象関数：app.post('/webhooks/line', ...)、rankDriverCandidates()、insertDriver()、POST /api/orders/:id/dispatch
+影響する既存機能：自動配車候補表示、LINE配達オファー送信、配送パートナー精算、KPI（稼働率）、地図表示
+リスク：現状「管理者が1人を選んで手配」という前提で設計されたdispatchOrder()まわり全体に
+手を入れることになるため、既存の管理画面フローとの整合性を慎重に設計する必要がある
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+F. 不明点・未確定事項
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+・Google Sheets／Google Apps Scriptは一切存在しません（プロジェクト内・Desktop内を検索したが
+　該当ファイルなし）。指示書の想定構成と実態が異なるため、方針確認が必要
+・Google Maps APIキーは未取得・未設定（以前から社長側でのご用意が必要と報告済み）
+・backend/.envの実際の内容を確認したところ、現在のTypeScript版.env.example（SQUARE_ACCESS_TOKEN等）
+　とは異なり、MERCHANT_LINE_USER_ID・DRIVER_LINE_USER_ID・MOCK_MODEなど旧JS版backend時代の
+　キーが残存している可能性があります（実際の値は表示していません）。現在のコードで参照されて
+　いないため実害はないと思われますが、仕様未確定として報告します
+・配送パートナーの「配送可能時間」「稼働エリアの複数指定」の具体的な仕様は未確定
+・二重受託防止・配送完了権限チェックをDB制約で行うかアプリケーションロジックで行うかは未確定
+・LINEのFlex Messageボタン押下（postback）から送信者（ドライバー）のLINE User IDをどう
+　特定・管理するかの設計は未確定
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+G. 推奨実装順序
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2-1：Driver Masterの拡張（available列・配送可能時間帯の追加、/adminへの編集UI追加）
+　　　　　既存driversテーブルへの列追加のみで低リスク
+STEP 2-2：Order ID統一化の検討（現状フロント内部id・表示用注文番号・backend id・Square注文IDの
+　　　　　4種類が併存しており、配車機能の土台として先に整理推奨）
+STEP 2-3：LINE Webhookへの送信者識別（event.source.userId）と署名検証の追加
+STEP 2-4：二重受託防止の排他制御実装
+STEP 2-5：配送完了操作の権限チェック実装
+STEP 2-6：複数ドライバーへの一斉配信モデルへの拡張
+　　　　　（現状の単一手動アサインからの移行。影響範囲が最も大きいため最後に）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+H. 実装前の最終確認
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+「実装前に確認が必要な項目がある」と判断します。
+
+1.【最重要】想定システム構成（Google Sheets／Google Apps Script）と、実際のシステム構成
+  （SQLite／Express TypeScript）が根本的に異なります。このままSQLiteベースでSTEP2を
+  進めるのか、それとも将来的にGoogle Sheets/Apps Scriptへ作り直す・移行する計画が
+  あるのか、方針をご確認ください。
+2. Google Maps APIキーが未取得です（社長側でのご用意が必要です）。
+3. ご指示の「複数ドライバーへ一斉配信→早い者勝ちで受託確定」というSTEP2の前提モデルと、
+  現在のシステムの「管理者が管理画面で1人を選んで手配する」というモデルは根本的に
+  異なります。どちらの方向で進めるか、方針確認が必要です。
+4. backend/.envに現行コードと不整合な旧キーが残存している可能性があります
+  （実害の有無は未確認）。
+
+以上
