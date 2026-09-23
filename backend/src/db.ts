@@ -378,6 +378,13 @@ ensureColumn('orders', 'delivery_instructions', 'TEXT');
 // RejectされてもproductsのACTIVE行には一切影響しない（product_draftsのみの追加列）。
 ensureColumn('product_drafts', 'rejection_reason', 'TEXT');
 
+// 【2026-09-23・社長承認】五葷抜き(ごくんぬき)トグル機能。価格に影響しない同額オプションのため
+// 新しい商品versionや金額テーブルは不要で、対応可否フラグ＋注文時の選択有無のみで完結する。
+// きのこパスタ等、五葷抜き版が別価格・別商品として独立登録されているものにはこのフラグを立てない
+// （そちらは既にトグル不要な別商品として扱う。gokun_nuki_available=1はあくまで「同額で選べる」商品向け）。
+ensureColumn('products', 'gokun_nuki_available', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('order_line_items', 'gokun_nuki_requested', 'INTEGER NOT NULL DEFAULT 0');
+
 // 2026-09-22：加盟店手数料ゼロ方針の確定に伴うデータ修正。
 // 過去に0.15（15%）で作成された既存加盟店データを0に更新する（何度実行しても安全な冪等処理）。
 // 新規作成分はDEFAULT_COMMISSION_RATE（index.ts側、0固定）で対応済みのため対象外にはならない。

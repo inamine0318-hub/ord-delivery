@@ -626,6 +626,7 @@ interface ProductRow {
   square_catalog_item_id: string | null;
   container_count: number | null;
   category: string | null;
+  gokun_nuki_available: number;
 }
 interface Product {
   id: number;
@@ -650,6 +651,7 @@ interface Product {
   squareCatalogItemId: string | null; // 商品マスター完成版：Square Catalog連携用の外部参照ID。ORDが正本。
   containerCount: number | null; // 商品マスター完成版：容器の個数（監査用メタデータ）
   category: string | null; // 商品マスター完成版：Food/Dessert/Drink等（監査用メタデータ）
+  gokunNukiAvailable: boolean; // 【2026-09-23社長承認】五葷抜き選択可否（同額オプション）
 }
 const rowToProduct = (r: ProductRow): Product => ({
   id: r.id,
@@ -674,6 +676,7 @@ const rowToProduct = (r: ProductRow): Product => ({
   squareCatalogItemId: r.square_catalog_item_id,
   containerCount: r.container_count,
   category: r.category,
+  gokunNukiAvailable: !!r.gokun_nuki_available,
 });
 
 function isFiniteNonNegative(n: unknown): n is number {
@@ -889,6 +892,16 @@ function getCurrentProductByStoreAndName(storeId: number, name: string): Product
   return rows.length === 1 ? rows[0] : undefined;
 }
 
+// 【2026-09-23社長承認】五葷抜き対応可否は価格に影響しない属性のため、価格変更のような
+// version履歴を作らず、現行versionの行を直接UPDATEする（store.activeの切替と同じ考え方）。
+function updateProductGokunNukiAvailable(productKey: string, available: boolean): Product | undefined {
+  const current = getCurrentProductByKey(productKey);
+  if (!current) return undefined;
+  db.prepare('UPDATE products SET gokun_nuki_available = ? WHERE id = ?').run(available ? 1 : 0, current.id);
+  const row = db.prepare('SELECT * FROM products WHERE id = ?').get(current.id) as unknown as ProductRow;
+  return rowToProduct(row);
+}
+
 interface CreateProductVersionInput {
   productKey: string;
   storeId: number;
@@ -908,6 +921,7 @@ interface CreateProductVersionInput {
   // undefined = 未指定（通常の価格改定シナリオ）→ 旧Versionから自動継承する。
   // string|null = 明示的に指定（Square側で商品を作り直した場合等）→ その値を優先する（継承しない）。
   squareCatalogItemId?: string | null;
+  gokunNukiAvailable?: boolean; // 未指定時は現行version(あれば)の値を引き継ぐ。新規商品はfalse
 }
 // 【最重要】既存versionをUPDATEしない。旧versionはsuperseded_atを設定するだけで残し、
 // 新versionを新規INSERTする。両方の操作を単一トランザクションにまとめ、途中で失敗した場合は
@@ -922,6 +936,7 @@ function createProductVersion(input: CreateProductVersionInput): Product {
     // 未指定(undefined)なら旧Versionから自動継承する（新規商品で旧Versionが無ければnull）。
     const squareCatalogItemId =
       input.squareCatalogItemId !== undefined ? input.squareCatalogItemId : current?.square_catalog_item_id ?? null;
+    const gokunNukiAvailable = input.gokunNukiAvailable ?? !!current?.gokun_nuki_available;
 
     if (current) {
       db.prepare('UPDATE products SET superseded_at = ? WHERE id = ?').run(now, current.id);
@@ -929,8 +944,8 @@ function createProductVersion(input: CreateProductVersionInput): Product {
 
     const info = db
       .prepare(
-        `INSERT INTO products (product_key, store_id, version, name, name_en, description, description_en, merchant_price, container_fee, markup_rate, ord_price, status, source_draft_id, approved_by, approved_at, created_at, container_count, category, square_catalog_item_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', ?,?,?,?,?,?,?)`
+        `INSERT INTO products (product_key, store_id, version, name, name_en, description, description_en, merchant_price, container_fee, markup_rate, ord_price, status, source_draft_id, approved_by, approved_at, created_at, container_count, category, square_catalog_item_id, gokun_nuki_available)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', ?,?,?,?,?,?,?,?)`
       )
       .run(
         input.productKey,
@@ -950,7 +965,8 @@ function createProductVersion(input: CreateProductVersionInput): Product {
         now,
         input.containerCount,
         input.category,
-        squareCatalogItemId
+        squareCatalogItemId,
+        gokunNukiAvailable ? 1 : 0
       );
     const row = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(info.lastInsertRowid)) as unknown as ProductRow;
     return rowToProduct(row);
@@ -981,6 +997,7 @@ interface OrderLineItemRow {
   markup_rate: number | null;
   ord_price_unit: number | null;
   created_at: string;
+  gokun_nuki_requested: number;
 }
 interface OrderLineItem {
   id: number;
@@ -994,6 +1011,7 @@ interface OrderLineItem {
   markupRate: number | null;
   ordPriceUnit: number | null;
   createdAt: string;
+  gokunNukiRequested: boolean; // 【2026-09-23社長承認】注文時点でお客様が五葷抜きを選択したか
 }
 const rowToOrderLineItem = (r: OrderLineItemRow): OrderLineItem => ({
   id: r.id,
@@ -1007,6 +1025,7 @@ const rowToOrderLineItem = (r: OrderLineItemRow): OrderLineItem => ({
   markupRate: r.markup_rate,
   ordPriceUnit: r.ord_price_unit,
   createdAt: r.created_at,
+  gokunNukiRequested: !!r.gokun_nuki_requested,
 });
 
 interface SettlementRow {
@@ -1133,12 +1152,13 @@ function insertOrderLineItem(input: {
   containerFee: number | null;
   markupRate: number | null;
   ordPriceUnit: number | null;
+  gokunNukiRequested?: boolean;
 }): OrderLineItem {
   const now = new Date().toISOString();
   const info = db
     .prepare(
-      `INSERT INTO order_line_items (order_id, product_key, product_version, product_name, quantity, merchant_price, container_fee, markup_rate, ord_price_unit, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO order_line_items (order_id, product_key, product_version, product_name, quantity, merchant_price, container_fee, markup_rate, ord_price_unit, created_at, gokun_nuki_requested)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       input.orderId,
@@ -1150,7 +1170,8 @@ function insertOrderLineItem(input: {
       input.containerFee,
       input.markupRate,
       input.ordPriceUnit,
-      now
+      now,
+      input.gokunNukiRequested ? 1 : 0
     );
   const row = db.prepare('SELECT * FROM order_line_items WHERE id = ?').get(Number(info.lastInsertRowid)) as unknown as OrderLineItemRow;
   return rowToOrderLineItem(row);
@@ -1713,6 +1734,18 @@ app.get('/api/products/:productKey/versions', requireAuth('ADMIN'), (req: Reques
   res.json(versions);
 });
 
+// 【2026-09-23社長承認】五葷抜きトグル機能。価格に影響しない属性のため専用の軽量PATCHを用意する
+// （storeのactive切替と同じ設計）。
+app.patch('/api/products/:productKey/gokun-nuki', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const { available } = req.body as { available?: unknown };
+  if (typeof available !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'available は boolean(true/false) で指定してください' });
+  }
+  const product = updateProductGokunNukiAvailable(req.params.productKey, available);
+  if (!product) return res.status(404).json({ ok: false, error: '商品が見つかりません' });
+  res.json({ ok: true, product });
+});
+
 // STEP3：Draftの元資料(menu_source_documents)を確認するための読み取り専用API。
 // 作成・更新・削除APIは今回追加しない（原本アップロード機能は別STEP）。
 app.get('/api/menu-source-documents/:id', requireAuth('ADMIN'), (req: Request, res: Response) => {
@@ -1835,6 +1868,7 @@ interface ValidatedLineItem {
   merchantPrice: number | null;
   containerFee: number | null;
   markupRate: number | null;
+  gokunNukiRequested: boolean; // 【2026-09-23社長承認】五葷抜き選択。商品がgokun_nuki_available=falseの場合は常にfalseに強制する
 }
 interface OrderValidationResult {
   ok: boolean;
@@ -1883,6 +1917,9 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
 
     const productId = typeof li?.product_id === 'string' ? li.product_id : null;
     const rawName = typeof li?.name === 'string' ? li.name : '';
+    // 【2026-09-23社長承認】五葷抜きトグル。お客様が選択した場合のみtrue送信される想定
+    // （未送信・false送信はすべて「選択なし」として扱う）。
+    const gokunNukiRequested = li?.gokun_nuki === true;
 
     // ---- ① 商品マスター(products)側の解決を先に試みる ----
     if (masterStore) {
@@ -1894,6 +1931,10 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
         if (masterProduct.store_id !== masterStore.id) {
           // 別店舗の商品を、指定店舗の注文として送信するケース（改ざん）。フォールバックせず即拒否。
           return { ok: false, error: `商品「${masterProduct.name}」は指定された店舗「${storeId}」には属していません` };
+        }
+        if (gokunNukiRequested && !masterProduct.gokun_nuki_available) {
+          // 五葷抜きに対応していない商品への選択は改ざん・不正入力として即座に拒否する（推測で許可しない）。
+          return { ok: false, error: `商品「${masterProduct.name}」は五葷抜きに対応していません` };
         }
         items.push({
           name: masterProduct.name,
@@ -1907,12 +1948,18 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
           merchantPrice: masterProduct.merchant_price,
           containerFee: masterProduct.container_fee,
           markupRate: masterProduct.markup_rate,
+          gokunNukiRequested,
         });
         usedIdMatching = usedIdMatching || items[items.length - 1].matchedBy === 'id';
         continue; // ①で解決できたので②(旧priceCatalog経路)には進まない
       }
       // masterStoreは存在するが該当商品が商品マスターに見つからない場合は、
       // 意図的に②へフォールバックする（商品マスター移行途中の商品を売れなくしないため）。
+    }
+
+    if (gokunNukiRequested) {
+      // 商品マスター未接続（旧priceCatalog経路）では対応可否を検証できないため、常に拒否する。
+      return { ok: false, error: `商品「${rawName}」は五葷抜きに対応していません` };
     }
 
     // ---- ② 旧priceCatalog.tsへのフォールバック（既存ロジック、無変更） ----
@@ -1967,6 +2014,7 @@ function validateAndRecalculateOrder(rawOrder: any): OrderValidationResult {
       merchantPrice: null,
       containerFee: null,
       markupRate: null,
+      gokunNukiRequested: false,
     });
   }
 
@@ -2498,6 +2546,7 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
           containerFee: i.containerFee,
           markupRate: i.markupRate,
           ordPriceUnit: i.unitPrice,
+          gokunNukiRequested: i.gokunNukiRequested,
         });
       });
 
@@ -3386,6 +3435,7 @@ function renderAdminHtml(): string {
       <td>${p.markupRate != null ? Math.round(p.markupRate * 100) + '%' : '-'}</td>
       <td>${yen(p.ordPrice)}</td>
       <td>${productStatusLabelJa(p.status)}</td>
+      <td><input type="checkbox" ${p.gokunNukiAvailable ? 'checked' : ''} onchange="toggleGokunNuki('${p.productKey}', this.checked)"></td>
       <td>${p.approvedBy || '-'}</td>
       <td>${p.approvedAt || '-'}</td>
       <td>${p.category || '-'}</td>
@@ -3632,8 +3682,8 @@ ${alerts.length ? `<div class="card full" style="border-color:#B3261E;"><h3>⚠�
   <h3>🗂 商品マスター（現行バージョン一覧）</h3>
   <div class="table-scroll">
   <table>
-  <tr><th>商品キー（Product Key）</th><th>加盟店</th><th>バージョン</th><th>商品名</th><th>英語名</th><th>加盟店価格</th><th>容器代</th><th>上乗せ率</th><th>ORD価格</th><th>状態</th><th>承認者</th><th>承認日時</th><th>カテゴリ</th><th>容器数</th><th>Square Catalog Item ID</th><th>操作</th></tr>
-  ${productRows || '<tr><td colspan="16">承認済みの商品はまだありません</td></tr>'}
+  <tr><th>商品キー（Product Key）</th><th>加盟店</th><th>バージョン</th><th>商品名</th><th>英語名</th><th>加盟店価格</th><th>容器代</th><th>上乗せ率</th><th>ORD価格</th><th>状態</th><th>五葷抜き</th><th>承認者</th><th>承認日時</th><th>カテゴリ</th><th>容器数</th><th>Square Catalog Item ID</th><th>操作</th></tr>
+  ${productRows || '<tr><td colspan="17">承認済みの商品はまだありません</td></tr>'}
   </table>
   </div>
 </div>
@@ -3681,6 +3731,11 @@ async function toggleStoreActive(id, next){
   const d = await res.json();
   if(!d.ok){ alert('エラー: '+d.error); return; }
   location.reload();
+}
+async function toggleGokunNuki(productKey, available){
+  const res = await fetch('/api/products/'+productKey+'/gokun-nuki', {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({available})});
+  const d = await res.json();
+  if(!d.ok){ alert('エラー: '+d.error); return; }
 }
 async function toggleAccommodationActive(id, next){
   const res = await fetch('/api/accommodations/'+id+'/active', {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({active: next})});
