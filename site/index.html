@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORD - Okinawa Resort Delivery</title>
+<style>
+  :root{
+    --teal-dark:#123b3a;
+    --teal:#1d5c58;
+    --teal-light:#2f7d76;
+    --cream:#faf6ee;
+    --cream-2:#f2ece0;
+    --coral:#e8583f;
+    --gold:#c9a15a;
+    --text:#1f2d2b;
+    --text-soft:#5b6b68;
+    --border:#e4ddcd;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+    background:var(--cream); color:var(--text); -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none;}
+  button{font-family:inherit; cursor:pointer;}
+  img{max-width:100%; display:block;}
+
+  /* ---------- Header ---------- */
+  header.site-header{
+    position:sticky; top:0; z-index:50; background:#fff;
+    border-bottom:1px solid var(--border);
+  }
+  .header-inner{
+    max-width:1180px; margin:0 auto; padding:12px 16px;
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .logo{display:flex; align-items:center; gap:8px; font-weight:800; color:var(--teal-dark); font-size:20px;}
+  .logo .sub{display:block; font-size:9px; font-weight:700; letter-spacing:1px; color:var(--text-soft);}
+  nav.main-nav{display:flex; gap:18px; font-size:14px; font-weight:600; color:var(--teal-dark);}
+  nav.main-nav a{padding:4px 0; border-bottom:2px solid transparent;}
+  nav.main-nav a.active{border-color:var(--coral);}
+  .header-actions{display:flex; align-items:center; gap:14px;}
+  .lang-switch{font-size:13px; font-weight:700; border:1px solid var(--border); border-radius:20px; padding:6px 12px; background:#fff; display:flex; align-items:center; gap:6px;}
+  .cart-btn{position:relative; font-size:20px; background:none; border:none;}
+  .cart-badge{
+    position:absolute; top:-6px; right:-8px; background:var(--coral); color:#fff;
+    font-size:10px; font-weight:700; border-radius:10px; min-width:16px; height:16px;
+    display:flex; align-items:center; justify-content:center; padding:0 3px;
+  }
+  .hamburger{display:none; background:none; border:none; font-size:22px;}
+
+  @media (max-width: 860px){
+    nav.main-nav{display:none;}
+    .hamburger{display:block;}
+  }
+
+  /* ---------- Hero ---------- */
+  .hero{position:relative; overflow:hidden;}
+  .hero-media{
+    height:min(58vw,460px); min-height:260px;
+    background:linear-gradient(180deg, rgba(10,30,28,.15), rgba(10,30,28,.55)),
+      linear-gradient(135deg,#0b3230,#1d5c58 60%,#2f7d76);
+    display:flex; align-items:flex-end;
+  }
+  .hero-content{padding:24px 20px 28px; color:#fff; max-width:1180px; margin:0 auto; width:100%;}
+  .hero-content h1{font-size:clamp(28px,6vw,46px); line-height:1.08; margin:0 0 10px; font-weight:800;}
+  .hero-content p{margin:0 0 16px; font-size:15px; max-width:420px; opacity:.95;}
+  .badge-row{display:flex; flex-wrap:wrap; gap:10px;}
+  .badge-pill{
+    background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35);
+    color:#fff; font-size:12px; font-weight:700; padding:6px 12px; border-radius:20px;
+  }
+  .cutoff-banner{
+    background:var(--coral); color:#fff; padding:12px 16px; display:flex; align-items:center;
+    justify-content:center; gap:10px; font-weight:700; font-size:14px; text-align:center; flex-wrap:wrap;
+  }
+  .cutoff-banner .big{font-size:17px;}
+
+  /* ---------- Sections ---------- */
+  .section{max-width:1180px; margin:0 auto; padding:32px 16px;}
+  .section h2{font-size:22px; color:var(--teal-dark); margin:0 0 4px; font-weight:800;}
+  .section .sub-jp{font-size:13px; color:var(--text-soft); margin:0 0 18px;}
+  .section-head{display:flex; align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+  .view-all{font-size:13px; font-weight:700; color:var(--teal); white-space:nowrap;}
+
+  /* Category strip */
+  .cat-strip{display:flex; gap:14px; overflow-x:auto; padding:6px 2px 14px; -webkit-overflow-scrolling:touch;}
+  .cat-item{flex:0 0 auto; display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; width:76px;}
+  .cat-icon{
+    width:56px; height:56px; border-radius:50%; background:var(--cream-2); border:2px solid transparent;
+    display:flex; align-items:center; justify-content:center; font-size:24px;
+  }
+  .cat-item.active .cat-icon{border-color:var(--teal); background:#e8f2f0;}
+  .cat-item span{font-size:11px; font-weight:700; text-align:center; color:var(--teal-dark);}
+
+  /* Cards grid */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:16px;}
+  .store-card, .product-card{
+    background:#fff; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+    display:flex; flex-direction:column;
+  }
+  .card-media{aspect-ratio:4/3; background:var(--cream-2); position:relative; overflow:hidden;}
+  .card-media img{width:100%; height:100%; object-fit:cover;}
+  .no-photo{
+    width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+    color:var(--text-soft); font-size:12px; font-weight:700; background:repeating-linear-gradient(45deg,#f2ece0,#f2ece0 10px,#ece4d3 10px,#ece4d3 20px);
+    text-align:center; padding:10px;
+  }
+  .card-body{padding:12px 14px 14px; display:flex; flex-direction:column; gap:6px; flex:1;}
+  .card-body h3{margin:0; font-size:15px; font-weight:800; color:var(--teal-dark);}
+  .card-body .en{font-size:12px; color:var(--text-soft); margin-top:-4px;}
+  .tag-row{display:flex; flex-wrap:wrap; gap:6px;}
+  .tag{background:#e8f2f0; color:var(--teal); font-size:11px; font-weight:700; padding:3px 9px; border-radius:10px;}
+  .price-row{display:flex; align-items:center; justify-content:space-between; margin-top:auto; padding-top:6px;}
+  .price{font-weight:800; color:var(--text);}
+  .add-btn{
+    width:32px; height:32px; border-radius:50%; background:var(--teal); color:#fff; border:none;
+    font-size:18px; display:flex; align-items:center; justify-content:center;
+  }
+  .store-card{cursor:pointer;}
+
+  /* Product detail */
+  .detail-back{display:inline-flex; align-items:center; gap:6px; font-weight:700; color:var(--teal); margin-bottom:14px; background:none; border:none; font-size:14px;}
+  .detail-layout{display:grid; grid-template-columns:1fr; gap:22px;}
+  @media (min-width:760px){ .detail-layout{grid-template-columns:1fr 1fr;} }
+  .detail-media{aspect-ratio:4/3; border-radius:var(--radius); overflow:hidden; background:var(--cream-2);}
+  .detail-media img{width:100%; height:100%; object-fit:cover;}
+  .detail-info h1{font-size:24px; margin:0 0 2px; color:var(--teal-dark);}
+  .detail-info .en{color:var(--text-soft); font-size:14px; margin-bottom:10px;}
+  .detail-price{font-size:22px; font-weight:800; margin:10px 0;}
+  .detail-desc{font-size:14px; color:var(--text-soft); line-height:1.6; margin-bottom:14px;}
+  .option-box{border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:14px; background:#fff;}
+  .option-box label{display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600;}
+  .qty-row{display:flex; align-items:center; gap:14px; margin-bottom:16px;}
+  .qty-btn{width:36px; height:36px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:18px;}
+  .primary-btn{
+    background:var(--teal); color:#fff; border:none; border-radius:10px; padding:14px 20px;
+    font-size:15px; font-weight:800; width:100%; display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .secondary-btn{background:#fff; color:var(--teal); border:1px solid var(--teal); border-radius:10px; padding:12px 18px; font-size:14px; font-weight:700;}
+
+  /* Footer */
+  footer{background:var(--teal-dark); color:#eaf3f1; margin-top:40px;}
+  .footer-inner{max-width:1180px; margin:0 auto; padding:28px 16px; display:flex; flex-wrap:wrap; gap:20px; justify-content:space-between; align-items:center;}
+  .footer-links{display:flex; flex-wrap:wrap; gap:16px; font-size:13px;}
+  .footer-badges{display:flex; gap:18px; flex-wrap:wrap; padding:20px 16px 0; max-width:1180px; margin:0 auto; justify-content:center;}
+  .footer-badges .badge-pill{background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.2); color:#eaf3f1;}
+  .copyright{text-align:center; font-size:11px; color:#9db5b1; padding:14px 0 22px;}
+
+  .toast{
+    position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+    background:var(--teal-dark); color:#fff; padding:12px 20px; border-radius:24px; font-size:14px; font-weight:700;
+    box-shadow:0 8px 24px rgba(0,0,0,.25); z-index:200; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(-6px);}
+
+  [hidden]{display:none!important;}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a href="#" class="logo" onclick="go('home');return false;">
+      🌴 ORD
+      <span class="sub" data-i18n="brandSub">OKINAWA RESORT DELIVERY</span>
+    </a>
+    <nav class="main-nav" id="mainNav">
+      <a href="#" onclick="go('home');return false;" data-i18n="navHome">Home</a>
+      <a href="#" onclick="go('restaurants');return false;" data-i18n="navRestaurants">Restaurants</a>
+      <a href="#" onclick="go('howToOrder');return false;" data-i18n="navHowToOrder">How to Order</a>
+      <a href="#" onclick="go('deliveryArea');return false;" data-i18n="navDeliveryArea">Delivery Area</a>
+      <a href="#" onclick="go('faq');return false;" data-i18n="navFaq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <button class="lang-switch" onclick="toggleLang()">🌐 <span id="langLabel">EN</span></button>
+      <button class="cart-btn" onclick="alert(t('cartComingSoon'))">🛒<span class="cart-badge" id="cartBadge" hidden>0</span></button>
+      <button class="hamburger" onclick="alert(t('navHome')+' / '+t('navRestaurants')+' / '+t('navHowToOrder')+' / '+t('navDeliveryArea')+' / '+t('navFaq'))">☰</button>
+    </div>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<footer>
+  <div class="footer-badges">
+    <span class="badge-pill">🌱 <span data-i18n="badgeVegan">Vegan Friendly</span></span>
+    <span class="badge-pill">☪ <span data-i18n="badgeHalal">Halal Friendly</span></span>
+    <span class="badge-pill">🚗 <span data-i18n="badgeResort">Resort Delivery</span></span>
+    <span class="badge-pill">💳 <span data-i18n="badgeCashless">Cashless Only</span></span>
+  </div>
+  <div class="footer-inner">
+    <div class="logo" style="color:#eaf3f1;">🌴 ORD</div>
+    <div class="footer-links">
+      <a href="#" data-i18n="footerTerms">Terms of Service</a>
+      <a href="#" data-i18n="footerPrivacy">Privacy Policy</a>
+      <a href="#" data-i18n="footerCommerceAct">Specified Commercial Transactions Act</a>
+      <a href="#" data-i18n="footerContact">Contact</a>
+    </div>
+  </div>
+  <div class="copyright">© 2026 OKINAWA RESORT DELIVERY. All rights reserved.</div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// ORD ブランドサイト（お客様向け）Phase 2: 閲覧フロー
+// 【重要】商品・店舗データは全て /api/public/* から取得する。ハードコードしない。
+// カート・チェックアウトはPhase 3で実装。ここでは「カートに追加」の見た目のみ用意し、
+// 件数バッジの更新程度に留める（正式な注文導線はPhase 3で構築する）。
+// ============================================================
+const BACKEND_URL = 'http://localhost:3001';
+
+const ORDER_CUTOFF_HOUR = 15; // 当日15:00までの事前注文（社長仕様書より）
+const DELIVERY_WINDOW = '18:00 - 21:00';
+
+const CATEGORY_META = {
+  ALL:       { icon:'📋', en:'All',       ja:'すべて' },
+  RAMEN:     { icon:'🍜', en:'Ramen',     ja:'ラーメン' },
+  RICE:      { icon:'🍚', en:'Rice',      ja:'ライス' },
+  PASTA:     { icon:'🍝', en:'Pasta',     ja:'パスタ' },
+  APPETIZER: { icon:'🥗', en:'Appetizer', ja:'前菜' },
+  DESSERT:   { icon:'🍰', en:'Dessert',   ja:'デザート' },
+  DRINK:     { icon:'🥤', en:'Drinks',    ja:'ドリンク' },
+  KIDS:      { icon:'🧒', en:'Kids',      ja:'キッズ' },
+};
+const CATEGORY_ORDER = ['ALL','RAMEN','RICE','PASTA','APPETIZER','DESSERT','DRINK','KIDS'];
+
+const I18N = {
+  en: {
+    brandSub:'OKINAWA RESORT DELIVERY',
+    navHome:'Home', navRestaurants:'Restaurants', navHowToOrder:'How to Order', navDeliveryArea:'Delivery Area', navFaq:'FAQ',
+    heroTitle:'YOUR OKINAWA STAY,\nMADE EASY.',
+    heroSub:'Delicious meals from local restaurants, delivered to your villa or hotel.',
+    cutoffLabel:'Order by 3:00 PM Today',
+    cutoffSub:'for delivery between ' + DELIVERY_WINDOW,
+    badgeVegan:'Vegan Friendly', badgeHalal:'Halal Friendly', badgeResort:'Resort Delivery', badgeCashless:'Cashless Only',
+    chooseRestaurant:'Choose a Restaurant', browseMenu:'Browse Menu', popularMenu:'Popular Menu',
+    viewAll:'View All', restaurantsTitle:'Restaurants', menuTitle:'Menu',
+    addToCart:'Add to Cart', cartComingSoon:'Cart & checkout are coming in the next phase.',
+    noPhoto:'Photo coming soon', backToRestaurants:'Back to restaurants', backToMenu:'Back to menu',
+    quantity:'Quantity', noFivePungent:'No Five Pungent Vegetables (五葷抜き)',
+    howToOrderTitle:'How to Order', deliveryAreaTitle:'Delivery Area', faqTitle:'FAQ',
+    comingSoonPage:'This page is coming soon.',
+    footerTerms:'Terms of Service', footerPrivacy:'Privacy Policy', footerCommerceAct:'Specified Commercial Transactions Act', footerContact:'Contact',
+    loadError:'Could not load data. Please make sure the backend is running.',
+    noRestaurants:'No restaurants are available for ordering right now.',
+  },
+  ja: {
+    brandSub:'沖縄リゾートデリバリー',
+    navHome:'ホーム', navRestaurants:'加盟店一覧', navHowToOrder:'ご利用方法', navDeliveryArea:'エリア・配送料', navFaq:'FAQ',
+    heroTitle:'沖縄の滞在を、\nもっと気軽に。',
+    heroSub:'人気レストランのお料理を、ヴィラやホテルへお届けします。',
+    cutoffLabel:'本日15:00までのご注文で',
+    cutoffSub:DELIVERY_WINDOW + 'にお届け',
+    badgeVegan:'ヴィーガン対応', badgeHalal:'ハラール対応', badgeResort:'リゾートへお届け', badgeCashless:'キャッシュレス決済のみ',
+    chooseRestaurant:'加盟店から選ぶ', browseMenu:'メニューから選ぶ', popularMenu:'人気のメニュー',
+    viewAll:'すべて見る', restaurantsTitle:'加盟店一覧', menuTitle:'メニュー',
+    addToCart:'カートに追加', cartComingSoon:'カート・ご注文機能は次のフェーズで公開予定です。',
+    noPhoto:'写真準備中', backToRestaurants:'加盟店一覧へ戻る', backToMenu:'メニューへ戻る',
+    quantity:'数量', noFivePungent:'五葷抜き（ねぎ・にんにく・にら等不使用）',
+    howToOrderTitle:'ご利用方法', deliveryAreaTitle:'エリア・配送料', faqTitle:'よくあるご質問',
+    comingSoonPage:'このページは準備中です。',
+    footerTerms:'利用規約', footerPrivacy:'プライバシーポリシー', footerCommerceAct:'特定商取引法に基づく表記', footerContact:'お問い合わせ',
+    loadError:'データを読み込めませんでした。バックエンドが起動しているかご確認ください。',
+    noRestaurants:'現在ご注文いただける加盟店がありません。',
+  },
+};
+
+const state = {
+  lang: 'en',
+  screen: 'home',
+  stores: [],
+  currentStore: null,
+  products: [],
+  currentCategory: 'ALL',
+  currentProduct: null,
+  cartCount: 0,
+  loading: false,
+  error: null,
+};
+
+function t(key){ return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key; }
+
+function toggleLang(){
+  state.lang = state.lang === 'en' ? 'ja' : 'en';
+  document.getElementById('langLabel').textContent = state.lang.toUpperCase();
+  document.documentElement.lang = state.lang;
+  applyStaticI18n();
+  render();
+}
+function applyStaticI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    el.textContent = t(key);
+  });
+}
+
+function showToast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(showToast._h);
+  showToast._h = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function isPastCutoff(){
+  const now = new Date();
+  return now.getHours() >= ORDER_CUTOFF_HOUR;
+}
+
+async function apiGet(path){
+  const res = await fetch(BACKEND_URL + path);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+async function loadStores(){
+  state.loading = true; state.error = null; render();
+  try {
+    const data = await apiGet('/api/public/stores');
+    state.stores = data.stores || [];
+  } catch (e) {
+    state.error = t('loadError');
+  }
+  state.loading = false;
+  render();
+}
+
+async function loadProducts(catalogStoreId){
+  state.loading = true; state.error = null; render();
+  try {
+    const data = await apiGet('/api/public/stores/' + encodeURIComponent(catalogStoreId) + '/products');
+    state.products = data.products || [];
+  } catch (e) {
+    state.error = t('loadError');
+    state.products = [];
+  }
+  state.loading = false;
+  render();
+}
+
+function imageUrl(ref){
+  if (!ref) return null;
+  return BACKEND_URL + ref;
+}
+
+function go(screen, payload){
+  state.screen = screen;
+  if (screen === 'restaurants' && state.stores.length === 0 && !state.loading) loadStores();
+  if (screen === 'home' && state.stores.length === 0 && !state.loading) loadStores();
+  if (screen === 'menu' && payload) {
+    state.currentStore = payload;
+    state.currentCategory = 'ALL';
+    loadProducts(payload.catalogStoreId);
+  }
+  if (screen === 'product' && payload) {
+    state.currentProduct = payload;
+  }
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  render();
+  document.querySelectorAll('nav.main-nav a').forEach(a => a.classList.remove('active'));
+}
+
+function addToCart(product){
+  state.cartCount++;
+  const badge = document.getElementById('cartBadge');
+  badge.hidden = false;
+  badge.textContent = state.cartCount;
+  showToast('✓ ' + product.name + ' — ' + t('addToCart'));
+}
+
+// ---------- Renderers ----------
+function render(){
+  const app = document.getElementById('app');
+  if (state.screen === 'home') app.innerHTML = renderHome();
+  else if (state.screen === 'restaurants') app.innerHTML = renderRestaurants();
+  else if (state.screen === 'menu') app.innerHTML = renderMenu();
+  else if (state.screen === 'product') app.innerHTML = renderProductDetail();
+  else app.innerHTML = renderStaticPage(state.screen);
+  applyStaticI18n();
+}
+
+function renderCutoffBanner(){
+  const past = isPastCutoff();
+  return `<div class="cutoff-banner">
+    <span class="big">⏰ ${past ? '' : t('cutoffLabel')}</span>
+    <span>${t('cutoffSub')}</span>
+  </div>`;
+}
+
+function renderHome(){
+  const featuredStores = state.stores.slice(0, 4);
+  const featuredProducts = (state.products.length ? state.products : []).slice(0, 6);
+  return `
+    <section class="hero">
+      <div class="hero-media">
+        <div class="hero-content">
+          <h1>${escapeHtml(t('heroTitle')).replace(/\n/g,'<br>')}</h1>
+          <p>${t('heroSub')}</p>
+          <div class="badge-row">
+            <span class="badge-pill">🌱 ${t('badgeVegan')}</span>
+            <span class="badge-pill">☪ ${t('badgeHalal')}</span>
+            <span class="badge-pill">🚗 ${t('badgeResort')}</span>
+            <span class="badge-pill">💳 ${t('badgeCashless')}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    ${renderCutoffBanner()}
+    <section class="section">
+      <div class="section-head">
+        <h2>${t('chooseRestaurant')}</h2>
+        <a class="view-all" href="#" onclick="go('restaurants');return false;">${t('viewAll')} →</a>
+      </div>
+      ${renderLoadingOrError() || (featuredStores.length ? `<div class="grid">${featuredStores.map(renderStoreCard).join('')}</div>` : `<p>${t('noRestaurants')}</p>`)}
+    </section>
+  `;
+}
+
+function renderLoadingOrError(){
+  if (state.loading) return `<p>...</p>`;
+  if (state.error) return `<p style="color:#b23b2e;">${state.error}</p>`;
+  return null;
+}
+
+function renderStoreCard(store){
+  const tagsHtml = (store.tags||[]).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('');
+  const logo = store.logoUrl ? `<img src="${imageUrl(store.logoUrl)}" alt="${escapeHtml(store.name)}">` : `<div class="no-photo">${escapeHtml(store.name)}</div>`;
+  return `<div class="store-card" onclick='go("menu", ${JSON.stringify(store).replace(/'/g,"&#39;")})'>
+    <div class="card-media">${logo}</div>
+    <div class="card-body">
+      <h3>${escapeHtml(store.name)}</h3>
+      <div class="tag-row">${tagsHtml}</div>
+    </div>
+  </div>`;
+}
+
+function renderRestaurants(){
+  return `
+    <section class="section">
+      <h2>${t('restaurantsTitle')}</h2>
+      ${renderLoadingOrError() || (state.stores.length ? `<div class="grid">${state.stores.map(renderStoreCard).join('')}</div>` : `<p>${t('noRestaurants')}</p>`)}
+    </section>
+  `;
+}
+
+function renderCategoryStrip(){
+  return `<div class="cat-strip">
+    ${CATEGORY_ORDER.map(catKey => {
+      const meta = CATEGORY_META[catKey];
+      const active = state.currentCategory === catKey ? 'active' : '';
+      return `<div class="cat-item ${active}" onclick="selectCategory('${catKey}')">
+        <div class="cat-icon">${meta.icon}</div>
+        <span>${state.lang === 'ja' ? meta.ja : meta.en}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function selectCategory(catKey){
+  state.currentCategory = catKey;
+  render();
+}
+
+function renderProductCard(p){
+  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(p.name)}">` : `<div class="no-photo">${escapeHtml(t('noPhoto'))}</div>`;
+  const name = state.lang === 'ja' ? p.name : (p.nameEn || p.name);
+  return `<div class="product-card">
+    <div class="card-media" onclick='go("product", ${JSON.stringify(p).replace(/'/g,"&#39;")})' style="cursor:pointer;">${img}</div>
+    <div class="card-body">
+      <h3 onclick='go("product", ${JSON.stringify(p).replace(/'/g,"&#39;")})' style="cursor:pointer;">${escapeHtml(name)}</h3>
+      ${p.gokunNukiAvailable ? `<div class="tag-row"><span class="tag">${escapeHtml(t('noFivePungent'))}</span></div>` : ''}
+      <div class="price-row">
+        <span class="price">¥${p.ordPrice.toLocaleString()}</span>
+        <button class="add-btn" onclick='event.stopPropagation();addToCart(${JSON.stringify(p).replace(/'/g,"&#39;")})'>+</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderMenu(){
+  if (!state.currentStore) { go('restaurants'); return ''; }
+  const filtered = state.currentCategory === 'ALL' ? state.products : state.products.filter(p => p.category === state.currentCategory);
+  return `
+    <section class="section">
+      <button class="detail-back" onclick="go('restaurants')">← ${t('backToRestaurants')}</button>
+      <h2>${escapeHtml(state.currentStore.name)}</h2>
+      ${renderCategoryStrip()}
+      ${renderLoadingOrError() || `<div class="grid">${filtered.map(renderProductCard).join('')}</div>`}
+    </section>
+  `;
+}
+
+function renderProductDetail(){
+  const p = state.currentProduct;
+  if (!p) { go('restaurants'); return ''; }
+  const name = state.lang === 'ja' ? p.name : (p.nameEn || p.name);
+  const desc = state.lang === 'ja' ? p.description : (p.descriptionEn || p.description);
+  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(name)}">` : `<div class="no-photo">${escapeHtml(t('noPhoto'))}</div>`;
+  return `
+    <section class="section">
+      <button class="detail-back" onclick="go('menu', state_currentStoreRef())">← ${t('backToMenu')}</button>
+      <div class="detail-layout">
+        <div class="detail-media">${img}</div>
+        <div class="detail-info">
+          <h1>${escapeHtml(name)}</h1>
+          ${state.lang !== 'ja' && p.name !== name ? `<div class="en">${escapeHtml(p.name)}</div>` : ''}
+          <div class="detail-price">¥${p.ordPrice.toLocaleString()}</div>
+          ${desc ? `<p class="detail-desc">${escapeHtml(desc)}</p>` : ''}
+          ${p.gokunNukiAvailable ? `<div class="option-box"><label><input type="checkbox" id="gokunNukiCheckbox"> ${escapeHtml(t('noFivePungent'))}</label></div>` : ''}
+          <button class="primary-btn" onclick='addToCart(${JSON.stringify(p).replace(/'/g,"&#39;")})'>🛒 ${t('addToCart')}</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+// go('menu')に戻る際、現在の店舗情報を再利用するための小さなヘルパー（グローバルJSONを都度埋め込まずに済ませる）
+function state_currentStoreRef(){ return state.currentStore; }
+
+function renderStaticPage(screen){
+  const titleKey = screen === 'howToOrder' ? 'howToOrderTitle' : screen === 'deliveryArea' ? 'deliveryAreaTitle' : 'faqTitle';
+  return `<section class="section"><h2>${t(titleKey)}</h2><p>${t('comingSoonPage')}</p></section>`;
+}
+
+function escapeHtml(str){
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- Init ----------
+applyStaticI18n();
+go('home');
+</script>
+</body>
+</html>
