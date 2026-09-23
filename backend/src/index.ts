@@ -42,6 +42,7 @@ app.use(express.urlencoded({ extended: true }));
 // 【2026-09-23・ORDブランドサイト構築】商品写真・加盟店ロゴの静的配信。
 // 加盟店提供の実写真のみを配置する想定（AI生成・推測画像は置かない）。
 app.use('/product-images', express.static(path.join(__dirname, '..', 'public', 'product-images')));
+app.use('/store-logos', express.static(path.join(__dirname, '..', 'public', 'store-logos')));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
