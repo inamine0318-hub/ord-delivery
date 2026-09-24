@@ -567,10 +567,16 @@ function selectVariant(productKey){
 // 【2026-09-24・社長承認】商品の選択肢（フレーバー等・単一選択）／追加オプション（複数選択可）を
 // 汎用的に扱う。Organic Soda・Coffee等の商品ごとの専用処理は書かず、product.optionsの
 // selectionType（SINGLE/MULTI）だけで判定する。
-function toggleProductOption(groupId, choiceId, selectionType){
+function toggleProductOption(groupId, choiceId, selectionType, required){
   const current = state.selectedOptionChoices[groupId] || [];
   if (selectionType === 'SINGLE') {
-    state.selectedOptionChoices[groupId] = [choiceId];
+    // 【2026-09-24・社長承認・ラーメンごはんオプション】required=falseのSINGLE群は
+    // 「未選択」を許容する。既に選択中の同じ選択肢をもう一度押すと選択解除する。
+    if (!required && current.length === 1 && current[0] === choiceId) {
+      state.selectedOptionChoices[groupId] = [];
+    } else {
+      state.selectedOptionChoices[groupId] = [choiceId];
+    }
   } else {
     state.selectedOptionChoices[groupId] = current.includes(choiceId)
       ? current.filter(id => id !== choiceId)
@@ -579,13 +585,20 @@ function toggleProductOption(groupId, choiceId, selectionType){
   render();
 }
 // 商品(p.options)と現在の選択状態から、選択済みオプションの一覧と追加料金合計を組み立てる。
-// FLAVORグループは必須単一選択のため、未選択なら1番目の選択肢を自動選択したものとして扱う。
+// required=trueのSINGLEグループ（FLAVOR/GOKUNNUKI等）は未選択なら1番目の選択肢を自動選択
+// したものとして扱う。required=false（例：ラーメンのごはん）は未選択のままにする。
+// 【2026-09-24・社長承認・ラーメン酵素玄米】group_type='RICE_BROWN'は、同じ商品内の
+// group_type='RICE'グループで何か選択されている場合のみ有効とする（商品ごとのハードコード
+// ではなく、group_typeの組み合わせのみで判定する汎用ロジック）。
 function resolveSelectedOptions(p){
   const groups = p.options || [];
+  const riceGroup = groups.find(g => g.type === 'RICE');
+  const riceSelected = riceGroup ? (state.selectedOptionChoices[riceGroup.groupId] || []).length > 0 : false;
   const list = [];
   for (const g of groups) {
+    if (g.type === 'RICE_BROWN' && !riceSelected) continue;
     let selectedIds = state.selectedOptionChoices[g.groupId];
-    if ((!selectedIds || selectedIds.length === 0) && g.selectionType === 'SINGLE' && g.choices.length) {
+    if ((!selectedIds || selectedIds.length === 0) && g.selectionType === 'SINGLE' && g.required && g.choices.length) {
       selectedIds = [g.choices[0].choiceId];
     }
     (selectedIds || []).forEach(id => {
@@ -931,9 +944,15 @@ function renderProductDetail(){
   // 商品ごとの専用コードは書かず、p.optionsのselectionTypeだけで分岐する。
   const { list: selectedOptions, optionsTotal } = resolveSelectedOptions(p);
   const finalPrice = p.ordPrice + optionsTotal;
+  // 【2026-09-24・社長承認・ラーメン酵素玄米】RICE_BROWN群は、同じ商品のRICE群が
+  // 何か選択されている場合のみ表示する（group_typeの組み合わせのみで判定、商品ごとの
+  // ハードコードはしない）。
+  const riceGroupForDisplay = (p.options || []).find(g => g.type === 'RICE');
+  const riceSelectedForDisplay = riceGroupForDisplay ? (state.selectedOptionChoices[riceGroupForDisplay.groupId] || []).length > 0 : false;
   const optionGroupsHtml = (p.options || []).map(g => {
+    if (g.type === 'RICE_BROWN' && !riceSelectedForDisplay) return '';
     const selectedIds = state.selectedOptionChoices[g.groupId]
-      || (g.selectionType === 'SINGLE' && g.choices.length ? [g.choices[0].choiceId] : []);
+      || (g.selectionType === 'SINGLE' && g.required && g.choices.length ? [g.choices[0].choiceId] : []);
     const groupLabel = state.lang === 'ja' ? g.label : (g.labelEn || g.label);
     const inputType = g.selectionType === 'SINGLE' ? 'radio' : 'checkbox';
     return `<div class="option-box">
@@ -943,7 +962,7 @@ function renderProductDetail(){
         const choiceLabel = state.lang === 'ja' ? c.label : (c.labelEn || c.label);
         const priceSuffix = c.priceDelta ? ` +¥${c.priceDelta.toLocaleString()}` : '';
         return `<label style="margin-bottom:8px;">
-          <input type="${inputType}" name="optGroup_${g.groupId}" value="${c.choiceId}" ${checked} onchange='toggleProductOption(${g.groupId}, ${c.choiceId}, "${g.selectionType}")'>
+          <input type="${inputType}" name="optGroup_${g.groupId}" value="${c.choiceId}" ${checked} onclick='toggleProductOption(${g.groupId}, ${c.choiceId}, "${g.selectionType}", ${g.required})'>
           <span>${escapeHtml(choiceLabel)}${priceSuffix}</span>
         </label>`;
       }).join('')}
