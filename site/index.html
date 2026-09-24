@@ -72,48 +72,15 @@
     .hamburger{display:flex;}
   }
 
-  /* ---------- Hero ---------- */
-  .hero{
-    position:relative; overflow:hidden; background:linear-gradient(120deg,#0e3634 0%,#1c5b55 45%,#2f7d76 75%,#e8a25f 130%);
-    padding:36px 20px 44px;
-  }
-  .hero::before{
-    content:''; position:absolute; inset:0; opacity:.16; pointer-events:none;
-    background-image:radial-gradient(circle at 15% 20%, #fff 0, transparent 2px), radial-gradient(circle at 80% 60%, #fff 0, transparent 2px);
-    background-size:120px 120px;
-  }
-  .hero-inner{
-    max-width:1240px; margin:0 auto; position:relative;
-    display:grid; grid-template-columns:1.1fr .9fr; gap:34px; align-items:center;
-  }
-  @media (max-width:900px){ .hero-inner{grid-template-columns:1fr;} }
-  .hero-copy{color:#fff; position:relative; z-index:2;}
-  .hero-copy h1{font-size:clamp(30px,4.6vw,50px); line-height:1.08; margin:0 0 14px; font-weight:800;}
-  .hero-copy p{margin:0 0 20px; font-size:15px; max-width:420px; opacity:.95; line-height:1.6;}
-  .hero-script{font-family:'Caveat',cursive; font-size:22px; color:#ffe3c9; margin:0 0 18px; display:block;}
-  .badge-row{display:flex; flex-wrap:wrap; gap:22px 26px; margin-top:10px;}
+  /* ---------- Hero（社長提供の完成グラフィックをそのまま使用） ---------- */
+  .hero-banner{width:100%; overflow:hidden; background:var(--teal-dark); line-height:0;}
+  .hero-banner img{width:100%; height:auto; display:block;}
   .badge-item{display:flex; flex-direction:column; align-items:center; gap:7px; width:88px; text-align:center;}
   .badge-circle{
     width:48px; height:48px; border-radius:50%; border:1.5px solid rgba(255,255,255,.55);
     display:flex; align-items:center; justify-content:center; color:#fff;
   }
   .badge-item span{font-size:11.5px; font-weight:700; color:#fff; line-height:1.3;}
-
-  .hero-visual{position:relative; z-index:2;}
-  .hero-photo-card{
-    border-radius:22px; overflow:hidden; box-shadow:var(--shadow-lift); border:6px solid rgba(255,255,255,.18);
-    aspect-ratio:5/4;
-  }
-  .hero-photo-card img{width:100%; height:100%; object-fit:cover;}
-  .cutoff-card{
-    background:var(--coral); color:#fff; border-radius:16px; padding:14px 18px; margin-top:-34px; margin-left:18px;
-    position:relative; z-index:3; box-shadow:0 12px 30px rgba(209,76,48,.4);
-    display:flex; align-items:center; gap:12px; max-width:340px;
-  }
-  .cutoff-card .clock{flex:0 0 auto; width:30px; height:30px;}
-  .cutoff-card .big{font-size:15px; font-weight:800; display:block;}
-  .cutoff-card .sub{font-size:12px; opacity:.95;}
-  @media (max-width:900px){ .cutoff-card{margin-left:0;} }
 
   /* ---------- Sections ---------- */
   .section{max-width:1240px; margin:0 auto; padding:38px 20px;}
@@ -196,6 +163,8 @@
     font-size:14px; display:flex; align-items:center; justify-content:center; gap:8px; margin-top:6px;
   }
   .cart-delivery-note{display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-soft); margin-top:14px; padding-top:14px; border-top:1px solid var(--border);}
+  .cart-cutoff-note{display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--teal); font-weight:700; margin-top:8px;}
+  .cart-cutoff-note.past{color:var(--coral-dark);}
 
   .mobile-cart-fab{
     position:fixed; bottom:18px; left:50%; transform:translateX(-50%); z-index:80;
@@ -336,19 +305,22 @@ const ICONS = {
   clock: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
 };
 
-// カテゴリアイコンは実際のGAJIMARU商品写真から代表カットを使用する（絵文字は使わない）
+// 【2026-09-24・社長提供】カテゴリアイコンはORD共通の汎用素材（/category-images）を使用する。
+// 特定加盟店(GAJIMARU等)の商品写真をORD全体のカテゴリ表示に流用しない（加盟店増加時の公平性・
+// 保守性の問題を避けるため。2026-09-23監査で発見した問題への対応）。
 const CATEGORY_META = {
-  ALL:       { photo:null, en:'All',       ja:'すべて' },
-  RAMEN:     { photo:'/product-images/ORD-M001-P001.jpg', en:'Ramen',     ja:'ラーメン' },
-  RICE:      { photo:'/product-images/ORD-M001-P017.jpg', en:'Rice',      ja:'ライス' },
-  PASTA:     { photo:'/product-images/ORD-M001-P020.jpg', en:'Pasta',     ja:'パスタ' },
-  APPETIZER: { photo:'/product-images/ORD-M001-P011.jpg', en:'Appetizer', ja:'前菜' },
-  DESSERT:   { photo:'/product-images/ORD-M001-P043.jpg', en:'Dessert',   ja:'デザート' },
-  DRINK:     { photo:'/product-images/ORD-M001-P047.jpg', en:'Drinks',    ja:'ドリンク' },
-  KIDS:      { photo:'/product-images/ORD-M001-P062.jpg', en:'Kids',      ja:'キッズ' },
+  ALL:       { photo:'/category-images/ALL.png',       en:'All',       ja:'すべて' },
+  RAMEN:     { photo:'/category-images/RAMEN.png',      en:'Ramen',     ja:'ラーメン' },
+  RICE:      { photo:'/category-images/RICE.png',       en:'Rice',      ja:'ライス' },
+  PASTA:     { photo:'/category-images/PASTA.png',      en:'Pasta',     ja:'パスタ' },
+  APPETIZER: { photo:'/category-images/APPETIZER.png',  en:'Appetizer', ja:'前菜' },
+  DESSERT:   { photo:'/category-images/DESSERT.png',    en:'Dessert',   ja:'デザート' },
+  DRINK:     { photo:'/category-images/DRINK.png',      en:'Drinks',    ja:'ドリンク' },
+  KIDS:      { photo:'/category-images/KIDS.png',       en:'Kids',      ja:'キッズ' },
 };
 const CATEGORY_ORDER = ['ALL','RAMEN','RICE','PASTA','APPETIZER','DESSERT','DRINK','KIDS'];
-const HERO_FEATURED_IMAGE = '/product-images/ORD-M001-P014.jpg';
+// 【2026-09-24・社長提供】ブランドヒーロー画像（英語/日本語併記の完成グラフィック）。
+const HERO_BRAND_IMAGE = '/brand-images/hero-home.jpg';
 
 const I18N = {
   en: {
@@ -579,6 +551,7 @@ function cartPanelHtml(){
     <div class="cart-subtotal"><span>${t('subtotal')}</span><span>¥${cartSubtotal().toLocaleString()}</span></div>
     <button class="cart-checkout-btn" onclick="showToast(t('checkoutComingSoon'))">${ICONS.cartWhite} ${t('proceedCheckout')}</button>
     <div class="cart-delivery-note">${ICONS.car.replace('width="22" height="22"','width="18" height="18"')} <span>${t('deliveryTimeLabel')}: ${DELIVERY_WINDOW}</span></div>
+    <div class="cart-cutoff-note ${isPastCutoff() ? 'past' : ''}">${ICONS.clock.replace('stroke="#fff"','stroke="currentColor"').replace('width="22" height="22"','width="16" height="16"')} <span>${isPastCutoff() ? t('cutoffLabelPast') : t('cutoffLabel') + '（' + t('cutoffSub') + '）'}</span></div>
   </div>`;
 }
 function renderCartPanelIfPresent(){
@@ -608,39 +581,12 @@ function render(){
   updateMobileFab();
 }
 
-function renderCutoffCard(){
-  const past = isPastCutoff();
-  return `<div class="cutoff-card">
-    <div class="clock">${ICONS.clock}</div>
-    <div><span class="big">${past ? t('cutoffLabelPast') : t('cutoffLabel')}</span><span class="sub">${t('cutoffSub')}</span></div>
-  </div>`;
-}
-
-function renderHeroBadges(){
-  return `<div class="badge-row">
-    ${[['leaf','badgeVegan'],['moon','badgeHalal'],['car','badgeResort'],['card','badgeCashless']].map(([icon,key]) =>
-      `<div class="badge-item"><div class="badge-circle">${ICONS[icon]}</div><span>${t(key)}</span></div>`
-    ).join('')}
-  </div>`;
-}
-
 function renderHome(){
   const featuredStores = state.stores.slice(0, 4);
   const popular = state.homeProducts.slice(0, 6);
   return `
-    <section class="hero">
-      <div class="hero-inner">
-        <div class="hero-copy">
-          <h1>${escapeHtml(t('heroTitle')).replace(/\\n/g,'<br>')}</h1>
-          <p>${t('heroSub')}</p>
-          ${renderHeroBadges()}
-        </div>
-        <div class="hero-visual">
-          <div class="hero-photo-card"><img src="${BACKEND_URL + HERO_FEATURED_IMAGE}" alt=""></div>
-          <span class="hero-script" style="display:block;margin:10px 0 0 18px;">${t('heroScript')}</span>
-          ${renderCutoffCard()}
-        </div>
-      </div>
+    <section class="hero-banner">
+      <img src="${BACKEND_URL + HERO_BRAND_IMAGE}" alt="YOUR OKINAWA STAY, MADE EASY. / 沖縄の滞在を、もっと気軽に。">
     </section>
     <div class="content-with-cart">
       <div class="main-col">
