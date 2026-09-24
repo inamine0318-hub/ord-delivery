@@ -2208,7 +2208,7 @@ interface PublicProductOptionChoice {
 }
 interface PublicProductOptionGroup {
   groupId: number;
-  type: 'FLAVOR' | 'ADDON';
+  type: 'FLAVOR' | 'ADDON' | 'GOKUNNUKI';
   label: string;
   labelEn: string | null;
   selectionType: 'SINGLE' | 'MULTI';
@@ -2245,7 +2245,7 @@ function getPublicProductOptions(productKey: string): PublicProductOptionGroup[]
   );
   return groups.map(g => ({
     groupId: g.id,
-    type: g.group_type as 'FLAVOR' | 'ADDON',
+    type: g.group_type as 'FLAVOR' | 'ADDON' | 'GOKUNNUKI',
     label: g.label,
     labelEn: g.label_en,
     selectionType: g.selection_type as 'SINGLE' | 'MULTI',
