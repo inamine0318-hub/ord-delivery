@@ -48,6 +48,9 @@ app.use('/store-logos', express.static(path.join(__dirname, '..', 'public', 'sto
 // AI生成画像を使用してよい区分（product-images/store-logosとは異なる方針）。
 app.use('/category-images', express.static(path.join(__dirname, '..', 'public', 'category-images')));
 app.use('/brand-images', express.static(path.join(__dirname, '..', 'public', 'brand-images')));
+// 【2026-09-24・社長承認・本番反映】店舗代表画像（外観・雰囲気を紹介する画像）の静的配信。
+// 商品写真(product-images)・ロゴ(store-logos)とは別ディレクトリで管理する。
+app.use('/store-photos', express.static(path.join(__dirname, '..', 'public', 'store-photos')));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
@@ -2147,6 +2150,7 @@ interface PublicStore {
   name: string;
   catalogStoreId: string | null;
   logoUrl: string | null;
+  photoUrl: string | null;
   description: string | null;
   descriptionEn: string | null;
   tags: string[];
@@ -2156,7 +2160,7 @@ interface PublicStore {
 function getPublicStores(): PublicStore[] {
   const rows = db
     .prepare(
-      `SELECT id, name, catalog_store_id, logo_url, description, description_en, tags, genre, area
+      `SELECT id, name, catalog_store_id, logo_url, photo_url, description, description_en, tags, genre, area
        FROM stores WHERE active = 1 ORDER BY id`
     )
     .all() as {
@@ -2164,6 +2168,7 @@ function getPublicStores(): PublicStore[] {
     name: string;
     catalog_store_id: string | null;
     logo_url: string | null;
+    photo_url: string | null;
     description: string | null;
     description_en: string | null;
     tags: string | null;
@@ -2185,6 +2190,7 @@ function getPublicStores(): PublicStore[] {
       name: r.name,
       catalogStoreId: r.catalog_store_id,
       logoUrl: r.logo_url,
+      photoUrl: r.photo_url,
       description: r.description,
       descriptionEn: r.description_en,
       tags,

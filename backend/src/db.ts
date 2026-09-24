@@ -393,6 +393,9 @@ ensureColumn('stores', 'description', 'TEXT');
 ensureColumn('stores', 'description_en', 'TEXT');
 ensureColumn('stores', 'tags', 'TEXT'); // JSON配列文字列（例:'["Vegan","Gluten-Free"]'）
 ensureColumn('stores', 'genre', 'TEXT');
+// 【2026-09-24・社長承認】店舗代表画像（外観・雰囲気を紹介する画像）用。logo_urlとは完全に別管理。
+// 商品写真(products.image_reference)とも無関係。backend-uitestで検証済みの内容を本番へ反映。
+ensureColumn('stores', 'photo_url', 'TEXT');
 
 // 【2026-09-23・ORDブランドサイト構築】メニューカテゴリ表示用。backend-uitestには既存の列
 // （container_count/square_catalog_item_id等と共に追加済み）だが、本番backendには存在しなかった
