@@ -83,14 +83,105 @@
   }
 
   /* ---------- Hero（社長提供の完成グラフィックをそのまま使用） ---------- */
-  .hero-banner{width:100%; overflow:hidden; background:var(--teal-dark); line-height:0;}
-  .hero-banner img{width:100%; height:auto; display:block;}
+  /* 【2026-09-24・社長承認】hero-home.jpg内に焼き込まれた「15:00締切バッジ」「18:00-21:00表示」は
+     写真そのものを加工せず、同じ位置に不透明な実HTML要素を重ねて視覚的に置き換える
+     （画像の該当ピクセルは既に元の背景が失われており、自然な除去による復元ができないため）。
+     .hero-wrapの縦横比を画像と完全に一致させることで、どの画面幅でも重なる位置がずれない。 */
+  /* 【2026-09-24・実装時判明】badge単独＋delivery-time単独の2ボックス構成では、モバイル幅
+     （画像の縦幅が非常に小さくなる）で両者が重なってしまうことを実機相当テストで確認したため、
+     1枚のクリック可能なカードに統合した（締切バッジと配達時間を分離しない）。 */
+  .hero-wrap{position:relative; width:100%; aspect-ratio:1672/941; overflow:hidden; background:var(--teal-dark);}
+  .hero-wrap img{width:100%; height:100%; object-fit:cover; display:block;}
+  .hero-cutoff-badge{
+    position:absolute; left:4.1%; top:63%; width:40%; min-height:clamp(55px,14.5vw,220px);
+    background:linear-gradient(135deg,#fbe4de,#f7d3ca); border-radius:14px;
+    display:flex; align-items:center; gap:8px; padding:6px 10px;
+    cursor:pointer; border:none; text-align:left; box-shadow:0 6px 18px rgba(0,0,0,.18);
+  }
+  .hero-cutoff-badge:active{transform:scale(.98);}
+  .hero-cutoff-badge .clock-ic{color:#b23b2e; flex:0 0 auto; width:clamp(14px,2.2vw,22px); height:clamp(14px,2.2vw,22px);}
+  .hero-cutoff-badge .clock-ic svg{width:100%; height:100%; display:block;}
+  .hero-cutoff-badge .txt{flex:1 1 auto; min-width:0;}
+  .hero-cutoff-badge .txt .en{display:block; font-size:clamp(8.5px,1.7vw,15px); font-weight:800; color:#8a2f22; line-height:1.1;}
+  .hero-cutoff-badge .txt .ja{display:block; font-size:clamp(7px,1.2vw,11.5px); font-weight:700; color:#b23b2e; line-height:1.1; margin-top:2px;}
+  .hero-cutoff-badge .txt .delivery-line{display:block; font-size:clamp(6.5px,1.1vw,10.5px); font-weight:700; color:var(--teal-dark); margin-top:3px; padding-top:2px; border-top:1px solid rgba(178,59,46,.25); line-height:1.15;}
+  .hero-cutoff-badge .arrow-ic{color:#fff; background:var(--coral-dark); border-radius:50%; width:clamp(14px,2.4vw,26px); height:clamp(14px,2.4vw,26px); display:flex; align-items:center; justify-content:center; flex:0 0 auto;}
+  .hero-cutoff-badge .arrow-ic svg{width:55%; height:55%;}
+  @media (max-width:340px){ .hero-cutoff-badge{width:52%;} }
   .badge-item{display:flex; flex-direction:column; align-items:center; gap:7px; width:88px; text-align:center;}
   .badge-circle{
     width:48px; height:48px; border-radius:50%; border:1.5px solid rgba(255,255,255,.55);
     display:flex; align-items:center; justify-content:center; color:#fff;
   }
   .badge-item span{font-size:11.5px; font-weight:700; color:#fff; line-height:1.3;}
+
+  /* ---------- Story section（トップページ：旅行者の一日のストーリー） ---------- */
+  /* 【2026-09-24・社長承認】商品一覧が過度に下へ移動しないよう、4ブロックを横並びの
+     コンパクトなグリッドにまとめる（フルスクリーンのストーリーセクションにはしない）。 */
+  .story-section{max-width:1240px; margin:0 auto; padding:30px 20px 6px;}
+  .story-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:16px;}
+  .story-item{background:var(--cream-2); border-radius:14px; padding:16px 14px; text-align:center;}
+  .story-item .num{font-family:'Poppins',sans-serif; font-weight:800; font-size:12px; color:var(--coral-dark); letter-spacing:1px;}
+  .story-item .en{font-family:'Poppins',sans-serif; font-weight:800; font-size:15px; color:var(--teal-dark); margin-top:4px; line-height:1.3;}
+  .story-item .ja{font-size:12px; color:var(--text-soft); margin-top:4px; line-height:1.4; font-weight:600;}
+  .story-item .detail{font-size:11.5px; color:var(--text-soft); margin-top:6px; line-height:1.5;}
+  @media (max-width:760px){
+    .story-grid{grid-template-columns:1fr 1fr; gap:10px;}
+    .story-item{padding:14px 10px;}
+  }
+
+  /* ---------- 情報ページ（ご注文・お届けについて／利用規約／プライバシー等） ---------- */
+  .info-hero{background:linear-gradient(135deg,var(--teal-dark),var(--teal)); color:#fff; padding:44px 20px;}
+  .info-hero-inner{max-width:900px; margin:0 auto; text-align:center;}
+  .info-hero-inner .kicker{font-family:'Poppins',sans-serif; font-weight:800; font-size:12px; letter-spacing:2px; color:#ffe3c9;}
+  .info-hero-inner h1{font-family:'Poppins',sans-serif; font-size:clamp(24px,4vw,34px); margin:8px 0 4px; font-weight:800;}
+  .info-hero-inner .ja{font-size:14px; color:#dcece8; margin-bottom:14px;}
+  .info-hero-inner p{font-size:15px; line-height:1.7; color:#eaf3f1;}
+  .info-hero-inner p.ja-body{font-size:13px; color:#cfe4df; margin-top:6px;}
+
+  .how-it-works{max-width:1000px; margin:0 auto; padding:34px 20px 10px;}
+  .how-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:16px;}
+  .how-step{background:#fff; border:1px solid var(--border); border-radius:14px; padding:16px 14px; text-align:center;}
+  .how-step .step-no{width:30px; height:30px; border-radius:50%; background:var(--teal); color:#fff; font-weight:800; display:flex; align-items:center; justify-content:center; margin:0 auto 8px; font-size:13px;}
+  .how-step .en{font-weight:800; font-size:13.5px; color:var(--teal-dark); line-height:1.35;}
+  .how-step .ja{font-size:11.5px; color:var(--text-soft); margin-top:3px;}
+  @media (max-width:700px){ .how-grid{grid-template-columns:1fr 1fr;} }
+
+  .info-section{max-width:900px; margin:0 auto; padding:26px 20px;}
+  .info-section h2{font-family:'Poppins',sans-serif; font-size:19px; color:var(--teal-dark); font-weight:800; margin:0 0 2px;}
+  .info-section h2 .ja{display:block; font-size:12.5px; color:var(--text-soft); font-weight:700; margin-top:2px;}
+  .info-card{background:var(--cream); border:1px solid var(--border); border-radius:14px; padding:18px 20px; margin-top:14px;}
+  .info-card + .info-card{margin-top:12px;}
+  .info-card p{font-size:14px; line-height:1.75; color:var(--text-main); margin:0 0 8px;}
+  .info-card p:last-child{margin-bottom:0;}
+  .info-card p.ja{font-size:12.5px; color:var(--text-soft); margin-top:-4px;}
+  .info-card h3{font-size:14.5px; color:var(--teal-dark); font-weight:800; margin:0 0 6px;}
+  .info-card h3 .ja{display:block; font-size:11.5px; color:var(--text-soft); font-weight:700; margin-top:2px;}
+
+  .fee-table{width:100%; border-collapse:collapse; margin-top:6px; font-size:13.5px;}
+  .fee-table th,.fee-table td{padding:9px 10px; text-align:center; border-bottom:1px solid var(--border);}
+  .fee-table th{background:var(--cream-2); color:var(--teal-dark); font-weight:800; font-size:12.5px;}
+  .fee-table td{color:var(--text-main);}
+
+  .policy-list{counter-reset:policy;}
+  .policy-item{counter-increment:policy; background:#fff; border:1px solid var(--border); border-radius:12px; padding:16px 18px; margin-bottom:12px; position:relative; padding-left:52px;}
+  .policy-item::before{
+    content:counter(policy); position:absolute; left:14px; top:16px; width:26px; height:26px; border-radius:50%;
+    background:var(--teal); color:#fff; font-weight:800; font-size:13px; display:flex; align-items:center; justify-content:center;
+  }
+  .policy-item h3{font-size:14px; color:var(--teal-dark); font-weight:800; margin:0 0 6px;}
+  .policy-item h3 .ja{display:block; font-size:11.5px; color:var(--text-soft); font-weight:700; margin-top:2px;}
+  .policy-item p{font-size:13.5px; line-height:1.7; color:var(--text-main); margin:0 0 6px;}
+  .policy-item p.ja{font-size:12px; color:var(--text-soft); margin-top:-2px;}
+
+  .commerce-table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .commerce-table th,.commerce-table td{padding:12px 10px; text-align:left; border-bottom:1px solid var(--border); vertical-align:top;}
+  .commerce-table th{width:34%; color:var(--teal-dark); font-weight:800; font-size:13px;}
+  .commerce-table th .ja{display:block; font-size:11px; color:var(--text-soft); font-weight:700;}
+  .commerce-table td{color:var(--text-main); line-height:1.6;}
+
+  .contact-box{background:var(--cream); border:1px solid var(--border); border-radius:14px; padding:24px; text-align:center;}
+  .contact-box .email{font-size:19px; font-weight:800; color:var(--teal-dark); margin:8px 0 18px; word-break:break-all;}
 
   /* ---------- Sections ---------- */
   .section{max-width:1240px; margin:0 auto; padding:38px 20px;}
@@ -278,10 +369,10 @@
       </span>
     </a>
     <div class="footer-links">
-      <a href="#" data-i18n="footerTerms">Terms of Service</a>
-      <a href="#" data-i18n="footerPrivacy">Privacy Policy</a>
-      <a href="#" data-i18n="footerCommerceAct">Specified Commercial Transactions Act</a>
-      <a href="#" data-i18n="footerContact">Contact</a>
+      <a href="#" onclick="go('terms');return false;" data-i18n="footerTerms">Terms of Service</a>
+      <a href="#" onclick="go('privacy');return false;" data-i18n="footerPrivacy">Privacy Policy</a>
+      <a href="#" onclick="go('commerceAct');return false;" data-i18n="footerCommerceAct">Specified Commercial Transactions Act</a>
+      <a href="#" onclick="go('contact');return false;" data-i18n="footerContact">Contact</a>
     </div>
   </div>
   <div class="copyright">© 2026 OKINAWA RESORT DELIVERY. All rights reserved.</div>
@@ -791,21 +882,64 @@ function render(){
   else if (state.screen === 'restaurants') app.innerHTML = renderRestaurants();
   else if (state.screen === 'menu') app.innerHTML = renderMenu();
   else if (state.screen === 'product') app.innerHTML = renderProductDetail();
+  else if (state.screen === 'orderInfo') app.innerHTML = renderOrderInfoPage();
+  else if (state.screen === 'terms') app.innerHTML = renderTermsPage();
+  else if (state.screen === 'privacy') app.innerHTML = renderPrivacyPage();
+  else if (state.screen === 'commerceAct') app.innerHTML = renderCommerceActPage();
+  else if (state.screen === 'contact') app.innerHTML = renderContactPage();
   else app.innerHTML = renderStaticPage(state.screen);
   applyStaticI18n();
   updateMobileFab();
 }
 
+// 【2026-09-24・社長承認】hero-home.jpgに焼き込まれていた「15:00締切バッジ」「18:00-21:00表示」を
+// 不透明な実HTML要素として画像に重ねる（画像の該当ピクセルは編集していない）。バッジはクリック可能。
+// 【実装時判明】2ボックス構成はモバイル幅で重なるため、1枚のカードに統合した。
+function renderHeroCutoffBadge(){
+  return `<button type="button" class="hero-cutoff-badge" onclick="go('orderInfo')">
+    <span class="clock-ic">${ICONS.clock.replace('stroke="#fff"','stroke="currentColor"')}</span>
+    <span class="txt">
+      <span class="en">PLAN YOUR DINNER AHEAD</span>
+      <span class="ja">今夜のディナーは15:00までにご注文ください</span>
+      <span class="delivery-line">Delivery 18:00–21:00<br>お届け 18:00–21:00</span>
+    </span>
+    <span class="arrow-ic">${ICONS.chevron}</span>
+  </button>`;
+}
+// 【2026-09-24・社長承認】トップページの「旅行者の一日のストーリー」。商品一覧が過度に
+// 下へ移動しないよう、4ブロックをコンパクトな横並びグリッド1つにまとめる。
+function renderStorySection(){
+  const items = [
+    { num:'01', en:'Enjoy Okinawa by day.', ja:'昼は、沖縄を思いっきり楽しむ。' },
+    { num:'02', en:'Then, slow down.', ja:'そのあとは、ゆっくり過ごす。' },
+    { num:'03', en:'Dinner? Leave it to us.', ja:'今夜のディナーは、私たちにおまかせください。',
+      detail:'No car? Far from restaurants? Don\'t feel like going out tonight? ORD brings dinner to you.' },
+    { num:'04', en:'Plan your dinner ahead.', ja:'今夜のディナーは、事前にご注文ください。',
+      detail:'Order by 15:00 and we\'ll deliver between 18:00–21:00.' },
+  ];
+  return `<section class="story-section">
+    <div class="story-grid">
+      ${items.map(it => `<div class="story-item">
+        <div class="num">STORY ${it.num}</div>
+        <div class="en">${escapeHtml(it.en)}</div>
+        <div class="ja">${escapeHtml(it.ja)}</div>
+        ${it.detail ? `<div class="detail">${escapeHtml(it.detail)}</div>` : ''}
+      </div>`).join('')}
+    </div>
+  </section>`;
+}
 function renderHome(){
   const featuredStores = state.stores.slice(0, 4);
   const popular = dedupeForDisplay(state.homeProducts).slice(0, 6);
   return `
-    <section class="hero-banner">
+    <section class="hero-wrap">
       <img src="${BACKEND_URL + HERO_BRAND_IMAGE}" alt="YOUR OKINAWA STAY, MADE EASY. / 沖縄の滞在を、もっと気軽に。">
+      ${renderHeroCutoffBadge()}
     </section>
+    ${renderStorySection()}
     <div class="content-with-cart">
       <div class="main-col">
-        <section class="section" style="padding-top:30px;">
+        <section class="section" style="padding-top:14px;">
           <div class="section-head">
             <h2>${t('chooseRestaurant')}</h2>
             <a class="view-all" href="#" onclick="go('restaurants');return false;">${t('viewAll')} ${ICONS.chevron}</a>
@@ -1044,6 +1178,309 @@ function renderProductDetail(){
       </div>
       <div>${cartPanelHtml()}</div>
     </div>
+  `;
+}
+
+// 【2026-09-24・社長承認】情報ページ(ご注文・お届けについて／利用規約／プライバシー／
+// 特定商取引法／お問い合わせ)は、外国人観光客向けに英語を主・日本語を補助として同時表示する
+// （既存のstate.lang切替とは別。既存機能・既存の切替UIには一切影響しない独立ページ）。
+function infoBackLink(){
+  return `<button class="detail-back" onclick="go('home')">${ICONS.chevron.replace('<path d="M9 6l6 6-6 6"/>','<path d="M15 6l-6 6 6 6"/>')} Back to Home ／ ホームに戻る</button>`;
+}
+
+function renderOrderInfoPage(){
+  return `
+    <div class="section" style="padding-bottom:0;">${infoBackLink()}</div>
+    <div class="info-hero">
+      <div class="info-hero-inner">
+        <div class="kicker">PLAN YOUR EVENING</div>
+        <h1>Enjoy your day.<br>We'll take care of dinner.</h1>
+        <div class="ja">今夜のことは、私たちにおまかせください。</div>
+        <p>After a full day exploring Okinawa, why not relax at your hotel or villa tonight?<br>
+        Whether you don't have a car or you're staying somewhere with few restaurants nearby, ORD delivers dinner to you within our delivery area.</p>
+        <p class="ja-body">沖縄で一日を楽しんだあとは、ホテルやヴィラでゆっくり過ごしませんか？<br>
+        車がない場合も、周辺にレストランが少ない場合も、ORDが対応エリアまでお食事をお届けします。</p>
+      </div>
+    </div>
+
+    <div class="how-it-works">
+      <div class="section-head" style="margin-bottom:0;"><h2 style="font-family:'Poppins',sans-serif;color:var(--teal-dark);">HOW ORD WORKS <span style="display:block;font-size:12.5px;color:var(--text-soft);font-weight:700;">ご利用の流れ</span></h2></div>
+      <div class="how-grid">
+        <div class="how-step"><div class="step-no">1</div><div class="en">Order by 3:00 PM</div><div class="ja">15:00までにご注文</div></div>
+        <div class="how-step"><div class="step-no">2</div><div class="en">Enjoy Okinawa</div><div class="ja">沖縄を満喫</div></div>
+        <div class="how-step"><div class="step-no">3</div><div class="en">Relax at your hotel or villa</div><div class="ja">ホテル・ヴィラでゆっくり</div></div>
+        <div class="how-step"><div class="step-no">4</div><div class="en">Dinner arrives between 18:00–21:00</div><div class="ja">18:00〜21:00にお届け</div></div>
+      </div>
+    </div>
+
+    <section class="info-section">
+      <h2>Important Information<span class="ja">重要事項</span></h2>
+
+      <div class="info-card">
+        <h3>Order Deadline<span class="ja">ご注文締切</span></h3>
+        <p><strong>By 15:00 on the day of delivery.</strong></p>
+        <p>If you'd like your dinner delivered today, please place your order by 15:00. Orders received after 15:00 may not be available for same-day delivery.</p>
+        <p class="ja">当日のお届けをご希望の場合は、15:00までにご注文ください。15:00を過ぎた場合は、当日のお届けをお受けできない場合があります。</p>
+        <p>Depending on product availability, restaurant hours, and delivery conditions, we may be unable to accept some orders.</p>
+        <p class="ja">※商品の在庫状況、店舗の営業状況、配送状況等により、ご注文をお受けできない場合があります。</p>
+      </div>
+
+      <div class="info-card">
+        <h3>Delivery Time<span class="ja">お届け時間</span></h3>
+        <p><strong>18:00 – 21:00</strong></p>
+        <p>Your order will be delivered between 18:00 and 21:00. Delivery times may shift slightly due to traffic, weather, road conditions, or preparation time at the restaurant.</p>
+        <p class="ja">ご注文いただいた商品は、18:00〜21:00の時間帯にお届けします。交通状況、天候、道路事情、店舗での調理状況などにより、お届け時間が前後する場合があります。</p>
+      </div>
+
+      <div class="info-card">
+        <h3>Delivery Area<span class="ja">配送エリア</span></h3>
+        <p>The delivery area and fee are determined based on the delivery address you enter when ordering. The minimum order amount and delivery fee vary depending on the delivery distance and travel time.</p>
+        <p class="ja">ご注文時に入力されたお届け先をもとに、配送可能エリアおよび配送料を判定します。配送距離・所要時間によって、最低注文金額および配送料が異なります。</p>
+      </div>
+
+      <div class="info-card">
+        <h3>Delivery Fee<span class="ja">配送料について</span></h3>
+        <p>The delivery fee is set based on the driving time to your delivery address.</p>
+        <p class="ja">配送料は、お届け先までの車での移動時間を基準に設定しています。</p>
+        <table class="fee-table">
+          <tr><th>Drive Time<br>移動時間</th><th>Delivery Fee<br>配送料</th><th>Minimum Order<br>最低注文金額</th></tr>
+          <tr><td>Up to 20 min／20分以下</td><td>¥500</td><td>¥10,000</td></tr>
+          <tr><td>21–30 min／21〜30分</td><td>¥1,000</td><td>¥10,000</td></tr>
+          <tr><td>31–40 min／31〜40分</td><td>¥2,000</td><td>¥12,000</td></tr>
+          <tr><td>41–50 min／41〜50分</td><td>¥3,500</td><td>¥12,000</td></tr>
+          <tr><td>51–60 min／51〜60分</td><td>¥5,000</td><td>¥15,000</td></tr>
+          <tr><td>Over 60 min／60分超</td><td colspan="2">Please contact us／要相談</td></tr>
+        </table>
+        <p style="margin-top:10px;">Actual travel time may vary depending on traffic conditions. For deliveries over 60 minutes, please contact us individually.</p>
+        <p class="ja">※交通状況等により実際の所要時間が変動する場合があります。※60分を超える配送については、個別にご相談ください。</p>
+      </div>
+
+      <div class="info-card">
+        <h3>Payment<span class="ja">お支払いについて</span></h3>
+        <p>ORD does not accept cash payments. Please use our online cashless payment at checkout.</p>
+        <p class="ja">ORDでは、現金でのお支払いには対応しておりません。オンラインでのキャッシュレス決済をご利用ください。</p>
+        <p>Payment method: online cashless payment. Payment is made at the time of ordering, and your order is confirmed once online payment is completed successfully.</p>
+        <p class="ja">支払い方法：オンラインによるキャッシュレス決済。お支払いはご注文時に行われ、オンライン決済が正常に完了した時点でご注文が正式に成立します。</p>
+      </div>
+    </section>
+
+    <section class="info-section">
+      <h2>Cancellation &amp; Delivery Policy<span class="ja">キャンセル・お届けに関する重要事項</span></h2>
+      <div class="info-card">
+        <p>To have your dinner ready for delivery each evening, ORD places your order with our partner restaurant and arranges preparation and delivery in advance. Because of this, the following cancellation and delivery rules apply.</p>
+        <p class="ja">ORDでは、当日のお届けに向けて、提携店舗への注文、商品の調理・準備、配送手配を行っています。そのため、以下のキャンセル・お届けルールを定めています。</p>
+      </div>
+      <div class="policy-list">
+        <div class="policy-item">
+          <h3>Cancelling Your Order<span class="ja">ご注文のキャンセル</span></h3>
+          <p>Same-day orders can be cancelled up until 15:00. Please contact ORD by 15:00 if you wish to cancel. After 15:00, preparation and delivery arrangements are already underway, so cancellations and refunds for the customer's convenience cannot be accepted.</p>
+          <p class="ja">当日のご注文は、15:00までキャンセルを受け付けます。15:00を過ぎた後は、店舗での調理・商品準備および配送手配が進むため、お客様都合によるキャンセルおよび返金はお受けできません。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Cancellations for the Customer's Convenience<span class="ja">お客様都合によるキャンセル</span></h3>
+          <p>After 15:00, the following types of cancellation cannot be refunded: a change of plans; being out or unavailable; a mistake in the order; a mistake in the delivery address; refusal to receive the order; or other reasons on the customer's side.</p>
+          <p class="ja">ご予定の変更、外出等による不在、注文内容の間違い、お届け先の入力間違い、受け取り拒否、その他お客様の事情によるキャンセルは、15:00以降は返金できません。</p>
+        </div>
+        <div class="policy-item">
+          <h3>If We Can't Reach You at Delivery<span class="ja">お届け先でお客様と連絡が取れない場合</span></h3>
+          <p>After arriving at your delivery address, our driver will try to reach you by phone. If we're unable to reach you within about 10 minutes, we'll end the delivery and treat the order as cancelled, with no refund for the product price or delivery fee.</p>
+          <p class="ja">配送スタッフが到着後、電話等によりご連絡を試みます。到着から10分間を目安に待機しても連絡が取れない場合、配送を終了しキャンセル扱いとします。この場合、商品代金・配送料の返金はお受けできません。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Mistakes in the Delivery Address<span class="ja">お届け先の入力間違い</span></h3>
+          <p>If the delivery address you entered is incorrect and correct delivery isn't possible, we may be unable to offer a cancellation or refund after 15:00. Please double-check your address, villa/hotel name, and room number when ordering.</p>
+          <p class="ja">お客様が入力されたお届け先に誤りがあり、正しい配送ができない場合、15:00以降はキャンセル・返金をお受けできない場合があります。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Entry to Hotels &amp; Villas<span class="ja">ヴィラ・ホテル等への入館・受け渡し</span></h3>
+          <p>Due to a property's rules or security, our driver may not be able to enter the building. In that case, delivery may take place at the entrance, front desk, or another designated handover point.</p>
+          <p class="ja">施設の規則やセキュリティ上の理由により、配送スタッフが建物内へ入れない場合があります。その場合はエントランス、フロント等での受け渡しとなる場合があります。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Weather, Disasters &amp; Traffic<span class="ja">天候・災害・交通事情等</span></h3>
+          <p>In the event of a typhoon, heavy rain, strong winds, road closures, an accident, a disaster, or other unavoidable circumstances that make safe delivery difficult, we may cancel or suspend delivery. Refunds in these cases will be reviewed based on the situation.</p>
+          <p class="ja">台風、豪雨、強風、道路の通行規制、事故、災害その他のやむを得ない事情により、安全な配送が困難となった場合、注文をキャンセルまたは配送を中止する場合があります。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Restaurant-Side Cancellations<span class="ja">店舗側の事情によるキャンセル</span></h3>
+          <p>Occasionally an item may be unavailable due to being sold out, a restaurant's temporary closure, or a preparation issue. In this case ORD will contact you to arrange a cancellation or another option — this is treated separately from a customer-side cancellation.</p>
+          <p class="ja">商品の売り切れ、店舗の臨時休業、調理上の問題等により、注文された商品を用意できない場合があります。この場合はORDからご連絡し、キャンセルまたは可能な対応をご案内します。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Delivery Issues on ORD's Side<span class="ja">ORD側の事情による配送不能</span></h3>
+          <p>If we're unable to deliver your order due to driver availability, a system issue, or another circumstance on ORD's side, we'll contact you and arrange an appropriate response.</p>
+          <p class="ja">配送スタッフの手配ができない、システム上の問題が発生した等、ORD側の事情により注文をお届けできない場合は、お客様へご連絡のうえ対応します。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Wrong, Missing, or Damaged Items<span class="ja">商品の間違い・不足・破損等</span></h3>
+          <p>If you received the wrong item, an item is missing, an item was damaged in transit, or your order otherwise clearly differs from what you ordered, please contact ORD as soon as possible after delivery. We'll review the situation and arrange a replacement, refund, or other appropriate response.</p>
+          <p class="ja">注文と異なる商品、不足、配送中の破損等がある場合は、商品到着後できるだけ早くORDまでご連絡ください。確認のうえ、交換、返金その他必要な対応を行います。</p>
+        </div>
+        <div class="policy-item">
+          <h3>Returns &amp; Exchanges<span class="ja">食品の返品・交換</span></h3>
+          <p>Due to the nature of food products, we don't accept returns or exchanges for the customer's convenience. This doesn't apply where the issue is due to a wrong item, a shortage, damage, or another problem on ORD's or the restaurant's side.</p>
+          <p class="ja">食品という商品の性質上、お客様都合による返品・交換はお受けしておりません。商品間違い、不足、破損等、ORDまたは店舗側に原因がある場合はこの限りではありません。</p>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderTermsPage(){
+  return `
+    <div class="section" style="padding-bottom:0;">${infoBackLink()}</div>
+    <div class="info-hero">
+      <div class="info-hero-inner">
+        <div class="kicker">LEGAL</div>
+        <h1>Terms of Service</h1>
+        <div class="ja">利用規約</div>
+        <p>These Terms of Service set out the conditions for using the food ordering and delivery service provided by OKINAWA RESORT DELIVERY ("ORD").</p>
+        <p class="ja-body">本利用規約は、OKINAWA RESORT DELIVERY（以下「ORD」といいます。）が提供する飲食物の注文・配送サービスの利用条件を定めるものです。</p>
+      </div>
+    </div>
+    <section class="info-section">
+      ${[
+        ['1. About the Service','サービスについて','ORD provides a service that delivers products from partner restaurants to a delivery address specified by the customer.','ORDは、提携する飲食店の商品を、お客様が指定したお届け先へ配送するサービスを提供します。'],
+        ['2. Placing an Order','ご注文について','Please enter the product, quantity, delivery address, and any other required information accurately. If there is a mistake in your order, please contact ORD promptly.','お客様は、商品、数量、お届け先、その他必要な情報を正確に入力してご注文ください。ご注文内容に誤りがある場合、ORDまで速やかにご連絡ください。'],
+        ['3. Accepting Orders','ご注文の受付','For same-day delivery, please order by 15:00 in principle. We may be unable to accept an order due to restaurant availability, product stock, delivery conditions, or other circumstances.','当日のお届けをご希望の場合、原則として15:00までにご注文ください。店舗の営業状況、商品の在庫状況、配送状況その他の事情により、ご注文をお受けできない場合があります。'],
+        ['4. About the Products','商品について','Products are prepared by our partner restaurants. Product photos are for illustration only; the actual presentation, container, or ingredients may differ.','商品は提携店舗にて調理・準備されます。商品写真はイメージであり、盛り付け、容器、食材等が実際の商品と異なる場合があります。'],
+        ['5. Delivery','お届けについて','Delivery takes place between 18:00 and 21:00. Delivery times may shift due to traffic, weather, road conditions, restaurant preparation time, or other circumstances.','お届け時間は18:00〜21:00です。交通状況、天候、道路事情、店舗での調理状況その他の事情により、お届け時間が前後する場合があります。'],
+        ['6. Delivery Fee &amp; Minimum Order Amount','配送料・最低注文金額','The delivery fee and minimum order amount are set according to the driving time to your delivery address. For details, please see the "Order &amp; Delivery Information" page.','配送先までの車での移動時間に応じて、配送料および最低注文金額が設定されます。詳細は「ご注文・お届けについて」のページをご確認ください。'],
+        ['7. Payment','お支払い','Payment is made using the cashless payment method designated by ORD. We do not accept cash payments.','お支払いは、ORDが指定するキャッシュレス決済方法によるものとします。現金によるお支払いには対応しておりません。'],
+        ['8. Cancellation','キャンセル','Cancellations are subject to the cancellation conditions set out on the "Order &amp; Delivery Information" page.','キャンセルについては、「ご注文・お届けについて」に記載するキャンセル条件に従うものとします。'],
+        ['9. Prohibited Conduct','禁止事項','Customers must not: enter false information; use another person&#39;s information without permission; use a fraudulent means of payment; interfere with ORD&#39;s operations; or engage in any other conduct ORD deems inappropriate.','お客様は、虚偽の情報を入力する行為、他人の情報を無断で使用する行為、不正な決済手段を使用する行為、ORDの運営を妨害する行為、その他ORDが不適切と判断する行為を行ってはいけません。'],
+        ['10. Changes to or Suspension of the Service','サービスの変更・停止','ORD may change or suspend all or part of the Service due to weather, disasters, traffic conditions, restaurant circumstances, system failure, or other unavoidable circumstances.','ORDは、天候、災害、交通事情、店舗の都合、システム障害その他やむを得ない事情により、サービスの全部または一部を変更・停止する場合があります。'],
+        ['11. Changes to these Terms','規約の変更','ORD may change these Terms as necessary. The revised Terms apply from the time they are posted on the ORD website.','ORDは、必要に応じて本規約を変更することがあります。変更後の規約は、ORDのウェブサイト上に掲載した時点から適用されるものとします。'],
+        ['12. Governing Law &amp; Jurisdiction','準拠法・管轄','These Terms are governed by the laws of Japan. Any disputes relating to the Service will be resolved in accordance with applicable law.','本規約は日本法に準拠します。サービスに関して紛争が生じた場合は、法令に従い解決するものとします。'],
+      ].map(([enT,jaT,enB,jaB]) => `<div class="info-card">
+        <h3>${enT}<span class="ja">${jaT}</span></h3>
+        <p>${enB}</p>
+        <p class="ja">${jaB}</p>
+      </div>`).join('')}
+    </section>
+  `;
+}
+
+function renderPrivacyPage(){
+  return `
+    <div class="section" style="padding-bottom:0;">${infoBackLink()}</div>
+    <div class="info-hero">
+      <div class="info-hero-inner">
+        <div class="kicker">LEGAL</div>
+        <h1>Privacy Policy</h1>
+        <div class="ja">プライバシーポリシー</div>
+        <p>OKINAWA RESORT DELIVERY ("ORD") handles customers' personal information appropriately and is committed to protecting it.</p>
+        <p class="ja-body">OKINAWA RESORT DELIVERY（以下「ORD」といいます。）は、お客様の個人情報を適切に取り扱い、その保護に努めます。</p>
+      </div>
+    </div>
+    <section class="info-section">
+      <div class="info-card">
+        <h3>1. Information We Collect<span class="ja">取得する情報</span></h3>
+        <p>Name, phone number, email address, delivery address, order details, inquiry details, and other information necessary to provide the Service.</p>
+        <p class="ja">お名前、電話番号、メールアドレス、お届け先住所、ご注文内容、お問い合わせ内容、その他サービスの提供に必要な情報。</p>
+      </div>
+      <div class="info-card">
+        <h3>2. Purpose of Use<span class="ja">利用目的</span></h3>
+        <p>Accepting and confirming orders; delivering products; contacting customers; responding to inquiries; providing and improving the Service; preventing fraudulent use; and other purposes incidental to the above.</p>
+        <p class="ja">ご注文の受付・確認、商品のお届け、お客様への連絡、お問い合わせへの対応、サービスの提供・改善、不正利用の防止、その他上記目的に付随する業務。</p>
+      </div>
+      <div class="info-card">
+        <h3>3. About Payment Information<span class="ja">決済情報について</span></h3>
+        <p>Online payments are processed using a payment system provided by a payment service provider. Except to the extent necessary for processing your payment, ORD does not directly collect or hold your credit card details.</p>
+        <p class="ja">オンライン決済については、決済サービス事業者が提供する決済システムを利用します。ORDは、決済処理に必要な範囲を除き、お客様のクレジットカード情報等を直接取得・管理しません。</p>
+      </div>
+      <div class="info-card">
+        <h3>4. Providing Information to Third Parties<span class="ja">個人情報の第三者提供</span></h3>
+        <p>Except where required by law, ORD will not provide your personal information to third parties without your consent. We may, however, share necessary information with partner restaurants and delivery-related providers to the extent needed to provide the Service.</p>
+        <p class="ja">ORDは、法令に基づく場合を除き、お客様の個人情報を本人の同意なく第三者へ提供しません。ただし、サービス提供に必要な範囲で、提携店舗や配送関係の事業者と必要な情報を共有する場合があります。</p>
+      </div>
+      <div class="info-card">
+        <h3>5. Managing Personal Information<span class="ja">個人情報の管理</span></h3>
+        <p>ORD strives to manage personal information appropriately in order to prevent leaks, loss, tampering, and other unauthorized access.</p>
+        <p class="ja">ORDは、取得した個人情報について、漏えい、紛失、改ざんその他の不正アクセスを防止するため、適切な管理に努めます。</p>
+      </div>
+      <div class="info-card">
+        <h3>6. Disclosure, Correction, Deletion, etc.<span class="ja">開示・訂正・削除等</span></h3>
+        <p>If you request disclosure, correction, or deletion of your own personal information, ORD will verify your identity and respond appropriately in accordance with applicable law.</p>
+        <p class="ja">お客様ご本人から、自己の個人情報について開示、訂正、削除等の申し出があった場合は、本人確認を行ったうえで、法令に従い適切に対応します。</p>
+      </div>
+      <div class="info-card">
+        <h3>7. Changes to this Policy<span class="ja">プライバシーポリシーの変更</span></h3>
+        <p>ORD may change this Policy as necessary. The revised Policy applies from the time it is posted on our website.</p>
+        <p class="ja">ORDは、必要に応じて本ポリシーを変更する場合があります。変更後の内容は、ウェブサイト上に掲載した時点から適用されます。</p>
+      </div>
+      <div class="info-card">
+        <h3>8. Contact<span class="ja">お問い合わせ</span></h3>
+        <p>For inquiries about how we handle personal information, please contact ORD's inquiry address on the Contact page.</p>
+        <p class="ja">個人情報の取り扱いに関するお問い合わせは、ORDのお問い合わせ窓口までご連絡ください。</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderCommerceActPage(){
+  const rows = [
+    ['Seller','販売事業者','稲嶺美華 (Mika Inamine)'],
+    ['Operator in Charge','運営責任者','稲嶺美華 (Mika Inamine)'],
+    ['Address','所在地','909-6 Kanekadan, Uruma City, Okinawa／うるま市兼箇段909-6'],
+    ['Phone','電話番号','080-2729-5183'],
+    ['Email','メールアドレス','okinawa.delivery.info@gmail.com'],
+    ['Selling Price','販売価格','Shown on each product page／各商品ページに表示'],
+    ['Delivery Fee','配送料金','Set according to driving time (via Google Routes) to the delivery address／配送先までのGoogle Routes車移動時間に応じて表示'],
+    ['Minimum Order Amount','最低注文金額','Set according to the delivery time band／配送時間帯に応じて表示'],
+    ['Order Deadline','ご注文締切','By 15:00 on the day of delivery／当日15:00まで'],
+    ['Delivery Time','配送時間','18:00 – 21:00'],
+    ['Payment Method','支払い方法','Online cashless payment／オンラインによるキャッシュレス決済'],
+    ['Payment Timing','支払い時期','At the time of ordering／注文時'],
+    ['Order Confirmation','注文成立','Your order is confirmed once online payment is completed successfully／オンライン決済完了時'],
+    ['Cancellation','キャンセル','Cancellations for the customer&#39;s convenience are accepted up until 15:00 on the day of the order. After 15:00, cancellations/refunds for the customer&#39;s convenience are generally not accepted.／当日15:00までのお客様都合によるキャンセルを受付。15:00以降のお客様都合によるキャンセル・返金は原則不可。'],
+    ['Returns &amp; Exchanges','返品・交換','Due to the nature of food products, we do not accept returns or exchanges for the customer&#39;s convenience. Exceptions apply for wrong items, shortages, damage, or other issues on our or the restaurant&#39;s side.／食品のため、お客様都合による返品・交換は不可。商品間違い、不足、破損等の場合は確認後に対応。'],
+  ];
+  return `
+    <div class="section" style="padding-bottom:0;">${infoBackLink()}</div>
+    <div class="info-hero">
+      <div class="info-hero-inner">
+        <div class="kicker">LEGAL</div>
+        <h1>Specified Commercial<br>Transactions Act</h1>
+        <div class="ja">特定商取引法に基づく表記</div>
+      </div>
+    </div>
+    <section class="info-section">
+      <div class="info-card">
+        <table class="commerce-table">
+          ${rows.map(([enT,jaT,val]) => `<tr><th>${enT}<span class="ja">${jaT}</span></th><td>${val}</td></tr>`).join('')}
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderContactPage(){
+  return `
+    <div class="section" style="padding-bottom:0;">${infoBackLink()}</div>
+    <div class="info-hero">
+      <div class="info-hero-inner">
+        <div class="kicker">GET IN TOUCH</div>
+        <h1>Contact</h1>
+        <div class="ja">お問い合わせ</div>
+        <p>Thank you for using ORD. For questions about your order, delivery, products, payment, or any other aspect of our service, please contact us at the email address below.</p>
+        <p class="ja-body">ORDをご利用いただきありがとうございます。ご注文、配送、商品、決済、その他ORDのサービスに関するお問い合わせは、下記メールアドレスまでご連絡ください。</p>
+      </div>
+    </div>
+    <section class="info-section">
+      <div class="contact-box">
+        <div class="email">okinawa.delivery.info@gmail.com</div>
+        <p style="font-size:14px;color:var(--text-main);margin:0 0 4px;">If your inquiry is about a specific order, please include the following if possible:</p>
+        <p style="font-size:12.5px;color:var(--text-soft);margin:0 0 14px;">ご注文に関するお問い合わせの場合は、可能であれば以下の情報をお知らせください。</p>
+        <ul style="text-align:left;max-width:360px;margin:0 auto;font-size:13.5px;color:var(--text-main);line-height:2;">
+          <li>Your name／お名前</li>
+          <li>Order date &amp; time／注文日時</li>
+          <li>Delivery address／配送先</li>
+          <li>Order details／注文内容</li>
+          <li>Details of your inquiry／お問い合わせ内容</li>
+        </ul>
+      </div>
+    </section>
   `;
 }
 
