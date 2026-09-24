@@ -168,6 +168,7 @@
   .cart-line-info{flex:1; min-width:0;}
   .cart-line-info .name{font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cart-line-info .price{font-size:12.5px; color:var(--text-soft); font-weight:700;}
+  .cart-line-options{font-size:11.5px; color:var(--teal); font-weight:600; margin:1px 0;}
   .cart-line-remove{background:none; border:none; color:var(--text-soft); font-size:13px; flex:0 0 auto;}
   .cart-subtotal{display:flex; justify-content:space-between; align-items:center; padding:14px 0 6px; font-weight:800; font-size:15px;}
   .cart-checkout-btn{
@@ -452,7 +453,8 @@ const state = {
   currentCategory: 'ALL',
   currentProduct: null,
   selectedVariantKey: null, // 商品詳細でサイズ・提供方法を選択中の場合、選択中のproductKey
-  cart: [], // { key, name, nameEn, ordPrice, imageReference, qty }
+  selectedOptionChoices: {}, // { [groupId]: choiceId[] } 商品詳細でのフレーバー/追加オプション選択中の内容
+  cart: [], // { key, name, nameEn, ordPrice, imageReference, qty, selectedOptions }
   loading: false,
   error: null,
   drawerOpen: false,
@@ -541,11 +543,21 @@ function go(screen, payload){
   state.drawerOpen = false;
   if ((screen === 'restaurants' || screen === 'home') && state.stores.length === 0 && !state.loading) loadStores();
   if (screen === 'menu' && payload) {
+    // 【2026-09-24・社長承認】商品詳細から「同じ店舗」のメニューへ戻る場合は、
+    // 直前に選択していたカテゴリを保持する（ALLへ強制リセットしない）。
+    // 店舗一覧等から「新しく」別の店舗へ入る場合は、従来どおりALLから開始する。
+    const isReturningToSameStore = state.currentStore && state.currentStore.catalogStoreId === payload.catalogStoreId;
     state.currentStore = payload;
-    state.currentCategory = 'ALL';
-    loadProducts(payload.catalogStoreId);
+    if (!isReturningToSameStore) {
+      state.currentCategory = 'ALL';
+      loadProducts(payload.catalogStoreId);
+    }
   }
-  if (screen === 'product' && payload) { state.currentProduct = payload; state.selectedVariantKey = null; }
+  if (screen === 'product' && payload) {
+    state.currentProduct = payload;
+    state.selectedVariantKey = null;
+    state.selectedOptionChoices = {};
+  }
   window.scrollTo(0, 0);
   render();
 }
@@ -554,12 +566,57 @@ function selectVariant(productKey){
   render();
 }
 
+// 【2026-09-24・社長承認】商品の選択肢（フレーバー等・単一選択）／追加オプション（複数選択可）を
+// 汎用的に扱う。Organic Soda・Coffee等の商品ごとの専用処理は書かず、product.optionsの
+// selectionType（SINGLE/MULTI）だけで判定する。
+function toggleProductOption(groupId, choiceId, selectionType){
+  const current = state.selectedOptionChoices[groupId] || [];
+  if (selectionType === 'SINGLE') {
+    state.selectedOptionChoices[groupId] = [choiceId];
+  } else {
+    state.selectedOptionChoices[groupId] = current.includes(choiceId)
+      ? current.filter(id => id !== choiceId)
+      : [...current, choiceId];
+  }
+  render();
+}
+// 商品(p.options)と現在の選択状態から、選択済みオプションの一覧と追加料金合計を組み立てる。
+// FLAVORグループは必須単一選択のため、未選択なら1番目の選択肢を自動選択したものとして扱う。
+function resolveSelectedOptions(p){
+  const groups = p.options || [];
+  const list = [];
+  for (const g of groups) {
+    let selectedIds = state.selectedOptionChoices[g.groupId];
+    if ((!selectedIds || selectedIds.length === 0) && g.selectionType === 'SINGLE' && g.choices.length) {
+      selectedIds = [g.choices[0].choiceId];
+    }
+    (selectedIds || []).forEach(id => {
+      const choice = g.choices.find(c => c.choiceId === id);
+      if (!choice) return;
+      list.push({
+        groupId: g.groupId, groupLabel: g.label, groupLabelEn: g.labelEn,
+        choiceId: choice.choiceId, choiceLabel: choice.label, choiceLabelEn: choice.labelEn,
+        priceDelta: choice.priceDelta,
+      });
+    });
+  }
+  const optionsTotal = list.reduce((s, o) => s + o.priceDelta, 0);
+  return { list, optionsTotal };
+}
+
 function addToCart(product, checked){
   const gokunNuki = checked === true;
-  const key = product.productKey + (gokunNuki ? ':gokunnuki' : '');
+  // 【2026-09-24・社長承認】選択済みのフレーバー/追加オプションをカート明細キーに含める。
+  // 選択内容が違えば別明細（例：Organic Soda/Cola と Organic Soda/Ginger は別行）になる。
+  const { list: selectedOptions, optionsTotal } = resolveSelectedOptions(product);
+  const optionKeyPart = selectedOptions.length
+    ? ':opt-' + selectedOptions.map(o => o.choiceId).sort((a,b) => a-b).join(',')
+    : '';
+  const key = product.productKey + (gokunNuki ? ':gokunnuki' : '') + optionKeyPart;
+  const finalPrice = product.ordPrice + optionsTotal;
   const existing = state.cart.find(i => i.key === key);
   if (existing) existing.qty++;
-  else state.cart.push({ key, productKey: product.productKey, name: product.name, nameEn: product.nameEn, ordPrice: product.ordPrice, imageReference: product.imageReference, gokunNuki, qty: 1 });
+  else state.cart.push({ key, productKey: product.productKey, name: product.name, nameEn: product.nameEn, ordPrice: finalPrice, imageReference: product.imageReference, gokunNuki, selectedOptions, qty: 1 });
   const name = state.lang === 'ja' ? product.name : (product.nameEn || product.name);
   showToast('✓ ' + name);
   onCartChanged();
@@ -641,15 +698,22 @@ function cartPanelHtml(){
   if (state.cart.length === 0) {
     return `<div class="cart-panel" id="cartPanelAnchor"><h3>${t('cartTitle')}</h3><p class="cart-empty">${t('cartEmpty')}</p></div>`;
   }
-  const lines = state.cart.map(i => `
+  const lines = state.cart.map(i => {
+    // 【2026-09-24・社長承認】選択したフレーバー/追加オプションをカート明細に表示する。
+    const optionsText = (i.selectedOptions || [])
+      .map(o => state.lang === 'ja' ? (o.choiceLabel || o.choiceLabelEn) : (o.choiceLabelEn || o.choiceLabel))
+      .join(', ');
+    return `
     <div class="cart-line">
       <img src="${imageUrl(i.imageReference) || ''}" onerror="this.style.visibility='hidden'" alt="">
       <div class="cart-line-info">
         <div class="name">${escapeHtml(state.lang==='ja'?i.name:(i.nameEn||i.name))}${i.gokunNuki ? ' 🌿' : ''}</div>
+        ${optionsText ? `<div class="cart-line-options">${escapeHtml(optionsText)}</div>` : ''}
         <div class="price">¥${i.ordPrice.toLocaleString()} × ${i.qty}</div>
       </div>
       <button class="cart-line-remove" onclick="removeFromCart('${i.key}')">${ICONS.close}</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   return `<div class="cart-panel" id="cartPanelAnchor">
     <h3>${t('cartTitle')} (${cartCount()}) <span class="edit-link"></span></h3>
     ${lines}
@@ -784,6 +848,9 @@ function selectCategory(catKey){ state.currentCategory = catKey; render(); }
 function renderProductCard(p){
   const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(p.name)}">` : productPlaceholderHtml(p);
   const variantInfo = variantInfoFor(p.productKey);
+  // 【2026-09-24・社長承認】フレーバー選択・追加オプションを持つ商品は、カード上から
+  // 直接カート追加させず、商品詳細で選んでから追加する（VARIANT_GROUPSと同じ考え方）。
+  const hasOptions = !!(p.options && p.options.length);
   const name = variantInfo ? (state.lang === 'ja' ? variantInfo.groupName.ja : variantInfo.groupName.en) : (state.lang === 'ja' ? p.name : (p.nameEn || p.name));
   const payload = JSON.stringify(p).replace(/'/g,"&#39;");
   let priceHtml, addBtnHtml;
@@ -791,6 +858,9 @@ function renderProductCard(p){
     const siblings = findSiblingVariants(variantInfo.groupId);
     const minPrice = siblings.length ? Math.min(...siblings.map(s => s.ordPrice)) : p.ordPrice;
     priceHtml = `¥${minPrice.toLocaleString()}〜`;
+    addBtnHtml = `<button class="add-btn" onclick='event.stopPropagation();go("product", ${payload})'>${ICONS.plus}</button>`;
+  } else if (hasOptions) {
+    priceHtml = `¥${p.ordPrice.toLocaleString()}〜`;
     addBtnHtml = `<button class="add-btn" onclick='event.stopPropagation();go("product", ${payload})'>${ICONS.plus}</button>`;
   } else {
     priceHtml = `¥${p.ordPrice.toLocaleString()}`;
@@ -857,6 +927,29 @@ function renderProductDetail(){
       }).join('')}
     </div>` : '';
 
+  // 【2026-09-24・社長承認】フレーバー選択（単一必須）・追加オプション（複数任意）を汎用的に描画。
+  // 商品ごとの専用コードは書かず、p.optionsのselectionTypeだけで分岐する。
+  const { list: selectedOptions, optionsTotal } = resolveSelectedOptions(p);
+  const finalPrice = p.ordPrice + optionsTotal;
+  const optionGroupsHtml = (p.options || []).map(g => {
+    const selectedIds = state.selectedOptionChoices[g.groupId]
+      || (g.selectionType === 'SINGLE' && g.choices.length ? [g.choices[0].choiceId] : []);
+    const groupLabel = state.lang === 'ja' ? g.label : (g.labelEn || g.label);
+    const inputType = g.selectionType === 'SINGLE' ? 'radio' : 'checkbox';
+    return `<div class="option-box">
+      <div style="font-weight:800; color:var(--teal-dark); font-size:13px; margin-bottom:10px;">${escapeHtml(groupLabel)}</div>
+      ${g.choices.map(c => {
+        const checked = selectedIds.includes(c.choiceId) ? 'checked' : '';
+        const choiceLabel = state.lang === 'ja' ? c.label : (c.labelEn || c.label);
+        const priceSuffix = c.priceDelta ? ` +¥${c.priceDelta.toLocaleString()}` : '';
+        return `<label style="margin-bottom:8px;">
+          <input type="${inputType}" name="optGroup_${g.groupId}" value="${c.choiceId}" ${checked} onchange='toggleProductOption(${g.groupId}, ${c.choiceId}, "${g.selectionType}")'>
+          <span>${escapeHtml(choiceLabel)}${priceSuffix}</span>
+        </label>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
   return `
     <div class="content-with-cart" style="padding-top:24px;">
       <div class="main-col">
@@ -867,9 +960,10 @@ function renderProductDetail(){
             <h1>${escapeHtml(name)}</h1>
             ${state.lang !== 'ja' && p.name !== name ? `<div class="en">${escapeHtml(p.name)}</div>` : ''}
             ${badges.length ? `<div class="tag-row" style="margin-bottom:6px;">${badges.join('')}</div>` : ''}
-            <div class="detail-price">¥${p.ordPrice.toLocaleString()}</div>
+            <div class="detail-price">¥${finalPrice.toLocaleString()}</div>
             ${desc ? `<p class="detail-desc">${escapeHtml(desc)}</p>` : ''}
             ${variantSelectorHtml}
+            ${optionGroupsHtml}
             ${p.gokunNukiAvailable ? `<div class="option-box"><label><input type="checkbox" id="gokunNukiCheckbox"> ${escapeHtml(t('noFivePungent'))}</label></div>` : ''}
             <button class="primary-btn" onclick='addToCart(${payload}, document.getElementById("gokunNukiCheckbox")?document.getElementById("gokunNukiCheckbox").checked:false)'>${ICONS.cartWhite} ${t('addToCart')}</button>
           </div>

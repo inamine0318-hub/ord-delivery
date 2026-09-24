@@ -234,6 +234,30 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  -- 【2026-09-24・社長承認・テスト環境限定】商品の選択肢／追加オプションの汎用構造。
+  -- 「Organic Sodaだけ」「Coffeeだけ」のような個別ハードコードを避け、どの加盟店・商品でも
+  -- 使い回せる形にする。1商品に複数グループ、1グループに複数選択肢を持てる。
+  -- group_type='FLAVOR'（単一選択・追加料金なし想定）／'ADDON'（複数選択可・price_deltaあり）。
+  CREATE TABLE IF NOT EXISTS product_option_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_key TEXT NOT NULL,
+    group_type TEXT NOT NULL, -- 'FLAVOR' | 'ADDON'
+    label TEXT NOT NULL,
+    label_en TEXT,
+    selection_type TEXT NOT NULL, -- 'SINGLE' | 'MULTI'
+    required INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS product_option_choices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    label_en TEXT,
+    price_delta INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (group_id) REFERENCES product_option_groups(id)
+  );
+
   -- 精算バッチ（加盟店・ドライバー共通）。amountは作成時に一度だけ確定し、以後の
   -- status変更では絶対に再計算・更新しない（advanceSettlementStatus()で強制）。
   CREATE TABLE IF NOT EXISTS settlements (
@@ -407,6 +431,9 @@ ensureColumn('product_drafts', 'rejection_reason', 'TEXT');
 // （そちらは既にトグル不要な別商品として扱う。gokun_nuki_available=1はあくまで「同額で選べる」商品向け）。
 ensureColumn('products', 'gokun_nuki_available', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('order_line_items', 'gokun_nuki_requested', 'INTEGER NOT NULL DEFAULT 0');
+// 【2026-09-24・社長承認・テスト環境限定】選択したフレーバー／追加オプションの注文時スナップショット
+// （JSON配列文字列）。既存のgokun_nuki_requestedとは独立した追加列で、既存注文には影響しない。
+ensureColumn('order_line_items', 'selected_options', 'TEXT');
 
 // 【2026-09-23・社長承認・ORDブランドサイト構築】お客様向け公開画面に必要な店舗紹介情報。
 // commission_rate等の内部運用列とは異なり、これらはすべて公開API(/api/public/stores)で

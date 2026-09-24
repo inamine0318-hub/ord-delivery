@@ -2356,6 +2356,21 @@ function getPublicStores(): PublicStore[] {
   });
 }
 
+interface PublicProductOptionChoice {
+  choiceId: number;
+  label: string;
+  labelEn: string | null;
+  priceDelta: number;
+}
+interface PublicProductOptionGroup {
+  groupId: number;
+  type: 'FLAVOR' | 'ADDON';
+  label: string;
+  labelEn: string | null;
+  selectionType: 'SINGLE' | 'MULTI';
+  required: boolean;
+  choices: PublicProductOptionChoice[];
+}
 interface PublicProduct {
   productKey: string;
   name: string;
@@ -2366,6 +2381,38 @@ interface PublicProduct {
   ordPrice: number;
   imageReference: string | null;
   gokunNukiAvailable: boolean;
+  options: PublicProductOptionGroup[];
+}
+// 【2026-09-24・社長承認・テスト環境限定】商品の選択肢／追加オプション（汎用構造）を取得する。
+// Organic Soda・Coffee等の個別ハードコードを避け、product_key単位でDBから汎用的に引く。
+function getPublicProductOptions(productKey: string): PublicProductOptionGroup[] {
+  const groups = db
+    .prepare(
+      `SELECT id, group_type, label, label_en, selection_type, required
+       FROM product_option_groups WHERE product_key = ? ORDER BY sort_order, id`
+    )
+    .all(productKey) as {
+    id: number; group_type: string; label: string; label_en: string | null;
+    selection_type: string; required: number;
+  }[];
+  if (groups.length === 0) return [];
+  const choiceStmt = db.prepare(
+    `SELECT id, label, label_en, price_delta FROM product_option_choices WHERE group_id = ? ORDER BY sort_order, id`
+  );
+  return groups.map(g => ({
+    groupId: g.id,
+    type: g.group_type as 'FLAVOR' | 'ADDON',
+    label: g.label,
+    labelEn: g.label_en,
+    selectionType: g.selection_type as 'SINGLE' | 'MULTI',
+    required: !!g.required,
+    choices: (choiceStmt.all(g.id) as { id: number; label: string; label_en: string | null; price_delta: number }[]).map(c => ({
+      choiceId: c.id,
+      label: c.label,
+      labelEn: c.label_en,
+      priceDelta: c.price_delta,
+    })),
+  }));
 }
 function getPublicProductsByCatalogStoreId(catalogStoreId: string): PublicProduct[] | undefined {
   const store = getStoreByCatalogId(catalogStoreId);
@@ -2396,6 +2443,7 @@ function getPublicProductsByCatalogStoreId(catalogStoreId: string): PublicProduc
     ordPrice: r.ord_price,
     imageReference: r.image_reference,
     gokunNukiAvailable: !!r.gokun_nuki_available,
+    options: getPublicProductOptions(r.product_key),
   }));
 }
 
