@@ -405,7 +405,6 @@ const I18N = {
     subtotal:'Subtotal', proceedCheckout:'Proceed to Checkout', checkoutComingSoon:'Checkout is coming in the next phase — your cart is saved.',
     deliveryTimeLabel:'Delivery Time', howToOrder:'How to Order',
     noPhoto:'Photo coming soon', backToRestaurants:'Back to restaurants', backToMenu:'Back to menu',
-    noFivePungent:'No Five Pungent Vegetables (五葷抜き)',
     howToOrderTitle:'How to Order', deliveryAreaTitle:'Delivery Area', faqTitle:'FAQ',
     comingSoonPage:'This page is coming soon.',
     footerTerms:'Terms of Service', footerPrivacy:'Privacy Policy', footerCommerceAct:'Specified Commercial Transactions Act', footerContact:'Contact',
@@ -431,7 +430,6 @@ const I18N = {
     subtotal:'小計', proceedCheckout:'ご注文手続きへ', checkoutComingSoon:'ご注文機能は次のフェーズで公開予定です（カートの内容は保持されます）。',
     deliveryTimeLabel:'配達時間', howToOrder:'ご利用方法',
     noPhoto:'写真準備中', backToRestaurants:'加盟店一覧へ戻る', backToMenu:'メニューへ戻る',
-    noFivePungent:'五葷抜き（ねぎ・にんにく・にら等不使用）',
     howToOrderTitle:'ご利用方法', deliveryAreaTitle:'エリア・配送料', faqTitle:'よくあるご質問',
     comingSoonPage:'このページは準備中です。',
     footerTerms:'利用規約', footerPrivacy:'プライバシーポリシー', footerCommerceAct:'特定商取引法に基づく表記', footerContact:'お問い合わせ',
@@ -604,19 +602,20 @@ function resolveSelectedOptions(p){
   return { list, optionsTotal };
 }
 
-function addToCart(product, checked){
-  const gokunNuki = checked === true;
-  // 【2026-09-24・社長承認】選択済みのフレーバー/追加オプションをカート明細キーに含める。
-  // 選択内容が違えば別明細（例：Organic Soda/Cola と Organic Soda/Ginger は別行）になる。
+function addToCart(product){
+  // 【2026-09-24・社長承認】五葷抜き（Bタイプ）もフレーバー/追加オプションと同じ
+  // selectedOptions構造に統合。個別の真偽値・専用キー接尾辞は廃止し、
+  // 選択済みオプション（GOKUNNUKIグループ選択を含む）だけでカート明細キーを生成する。
+  // 選択内容が違えば別明細（例：通常 と 五葷抜き、Organic Soda/Cola と /Ginger）になる。
   const { list: selectedOptions, optionsTotal } = resolveSelectedOptions(product);
   const optionKeyPart = selectedOptions.length
     ? ':opt-' + selectedOptions.map(o => o.choiceId).sort((a,b) => a-b).join(',')
     : '';
-  const key = product.productKey + (gokunNuki ? ':gokunnuki' : '') + optionKeyPart;
+  const key = product.productKey + optionKeyPart;
   const finalPrice = product.ordPrice + optionsTotal;
   const existing = state.cart.find(i => i.key === key);
   if (existing) existing.qty++;
-  else state.cart.push({ key, productKey: product.productKey, name: product.name, nameEn: product.nameEn, ordPrice: finalPrice, imageReference: product.imageReference, gokunNuki, selectedOptions, qty: 1 });
+  else state.cart.push({ key, productKey: product.productKey, name: product.name, nameEn: product.nameEn, ordPrice: finalPrice, imageReference: product.imageReference, selectedOptions, qty: 1 });
   const name = state.lang === 'ja' ? product.name : (product.nameEn || product.name);
   showToast('✓ ' + name);
   onCartChanged();
@@ -707,7 +706,7 @@ function cartPanelHtml(){
     <div class="cart-line">
       <img src="${imageUrl(i.imageReference) || ''}" onerror="this.style.visibility='hidden'" alt="">
       <div class="cart-line-info">
-        <div class="name">${escapeHtml(state.lang==='ja'?i.name:(i.nameEn||i.name))}${i.gokunNuki ? ' 🌿' : ''}</div>
+        <div class="name">${escapeHtml(state.lang==='ja'?i.name:(i.nameEn||i.name))}</div>
         ${optionsText ? `<div class="cart-line-options">${escapeHtml(optionsText)}</div>` : ''}
         <div class="price">¥${i.ordPrice.toLocaleString()} × ${i.qty}</div>
       </div>
@@ -866,9 +865,10 @@ function renderProductCard(p){
     priceHtml = `¥${p.ordPrice.toLocaleString()}`;
     addBtnHtml = `<button class="add-btn" onclick='event.stopPropagation();addToCart(${payload})'>${ICONS.plus}</button>`;
   }
+  // 【2026-09-24・社長承認】Bタイプ（gokunNukiAvailable、価格が変わらない五葷抜き選択商品）は
+  // 商品一覧に常時バッジを表示しない。Aタイプ（独立商品・価格が異なる）のピンクバッジのみ維持する。
   const badges = [];
   if (isStandaloneGokunNukiProduct(p)) badges.push(`<span class="tag peach">${escapeHtml(t('gokunNukiVersionBadge'))}</span>`);
-  else if (p.gokunNukiAvailable) badges.push(`<span class="tag mint">${escapeHtml(t('noFivePungent'))}</span>`);
   return `<div class="product-card">
     <div class="card-media" onclick='go("product", ${payload})' style="cursor:pointer;">${img}</div>
     <div class="card-body">
@@ -964,8 +964,7 @@ function renderProductDetail(){
             ${desc ? `<p class="detail-desc">${escapeHtml(desc)}</p>` : ''}
             ${variantSelectorHtml}
             ${optionGroupsHtml}
-            ${p.gokunNukiAvailable ? `<div class="option-box"><label><input type="checkbox" id="gokunNukiCheckbox"> ${escapeHtml(t('noFivePungent'))}</label></div>` : ''}
-            <button class="primary-btn" onclick='addToCart(${payload}, document.getElementById("gokunNukiCheckbox")?document.getElementById("gokunNukiCheckbox").checked:false)'>${ICONS.cartWhite} ${t('addToCart')}</button>
+            <button class="primary-btn" onclick='addToCart(${payload})'>${ICONS.cartWhite} ${t('addToCart')}</button>
           </div>
         </div>
       </div>
