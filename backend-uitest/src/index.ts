@@ -2367,7 +2367,7 @@ interface PublicProductOptionGroup {
   type: 'FLAVOR' | 'ADDON' | 'GOKUNNUKI' | 'TOPPING' | 'NOODLE_OPTION' | 'RICE' | 'RICE_BROWN';
   label: string;
   labelEn: string | null;
-  selectionType: 'SINGLE' | 'MULTI';
+  selectionType: 'SINGLE' | 'MULTI' | 'QUANTITY';
   required: boolean;
   choices: PublicProductOptionChoice[];
 }
@@ -2404,7 +2404,7 @@ function getPublicProductOptions(productKey: string): PublicProductOptionGroup[]
     type: g.group_type as 'FLAVOR' | 'ADDON' | 'GOKUNNUKI' | 'TOPPING' | 'NOODLE_OPTION' | 'RICE' | 'RICE_BROWN',
     label: g.label,
     labelEn: g.label_en,
-    selectionType: g.selection_type as 'SINGLE' | 'MULTI',
+    selectionType: g.selection_type as 'SINGLE' | 'MULTI' | 'QUANTITY',
     required: !!g.required,
     choices: (choiceStmt.all(g.id) as { id: number; label: string; label_en: string | null; price_delta: number }[]).map(c => ({
       choiceId: c.id,

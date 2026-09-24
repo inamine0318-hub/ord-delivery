@@ -452,6 +452,7 @@ const state = {
   currentProduct: null,
   selectedVariantKey: null, // 商品詳細でサイズ・提供方法を選択中の場合、選択中のproductKey
   selectedOptionChoices: {}, // { [groupId]: choiceId[] } 商品詳細でのフレーバー/追加オプション選択中の内容
+  selectedOptionQuantities: {}, // { [groupId]: { [choiceId]: qty } } 数量選択方式のオプション(例：バケット追加)の選択中の数量
   cart: [], // { key, name, nameEn, ordPrice, imageReference, qty, selectedOptions }
   loading: false,
   error: null,
@@ -555,6 +556,7 @@ function go(screen, payload){
     state.currentProduct = payload;
     state.selectedVariantKey = null;
     state.selectedOptionChoices = {};
+    state.selectedOptionQuantities = {};
   }
   window.scrollTo(0, 0);
   render();
@@ -584,9 +586,20 @@ function toggleProductOption(groupId, choiceId, selectionType, required){
   }
   render();
 }
+// 【2026-09-24・社長承認・バケット数量選択】selectionType='QUANTITY'の選択肢は、
+// 選ぶ/選ばないの二値ではなく0以上の数量を持つ（例：バケット追加 1枚+¥80）。
+// 商品ごとのハードコードはせず、selectionTypeだけで汎用的に判定する。上限は
+// 設けない（メニュー・既存仕様に上限の記載がないため）。
+function setOptionQuantity(groupId, choiceId, qty){
+  const clamped = Math.max(0, qty);
+  if (!state.selectedOptionQuantities[groupId]) state.selectedOptionQuantities[groupId] = {};
+  state.selectedOptionQuantities[groupId][choiceId] = clamped;
+  render();
+}
 // 商品(p.options)と現在の選択状態から、選択済みオプションの一覧と追加料金合計を組み立てる。
 // required=trueのSINGLEグループ（FLAVOR/GOKUNNUKI等）は未選択なら1番目の選択肢を自動選択
 // したものとして扱う。required=false（例：ラーメンのごはん）は未選択のままにする。
+// QUANTITYグループは数量×単価をpriceDeltaとして積み上げる。
 // 【2026-09-24・社長承認・ラーメン酵素玄米】group_type='RICE_BROWN'は、同じ商品内の
 // group_type='RICE'グループで何か選択されている場合のみ有効とする（商品ごとのハードコード
 // ではなく、group_typeの組み合わせのみで判定する汎用ロジック）。
@@ -597,6 +610,20 @@ function resolveSelectedOptions(p){
   const list = [];
   for (const g of groups) {
     if (g.type === 'RICE_BROWN' && !riceSelected) continue;
+    if (g.selectionType === 'QUANTITY') {
+      const quantities = state.selectedOptionQuantities[g.groupId] || {};
+      g.choices.forEach(choice => {
+        const qty = quantities[choice.choiceId] || 0;
+        if (qty <= 0) return;
+        list.push({
+          groupId: g.groupId, groupLabel: g.label, groupLabelEn: g.labelEn,
+          choiceId: choice.choiceId, choiceLabel: choice.label, choiceLabelEn: choice.labelEn,
+          priceDelta: choice.priceDelta * qty,
+          quantity: qty,
+        });
+      });
+      continue;
+    }
     let selectedIds = state.selectedOptionChoices[g.groupId];
     if ((!selectedIds || selectedIds.length === 0) && g.selectionType === 'SINGLE' && g.required && g.choices.length) {
       selectedIds = [g.choices[0].choiceId];
@@ -621,8 +648,12 @@ function addToCart(product){
   // 選択済みオプション（GOKUNNUKIグループ選択を含む）だけでカート明細キーを生成する。
   // 選択内容が違えば別明細（例：通常 と 五葷抜き、Organic Soda/Cola と /Ginger）になる。
   const { list: selectedOptions, optionsTotal } = resolveSelectedOptions(product);
+  // 【2026-09-24・社長承認・バケット数量選択】quantityを持つ選択肢は、数量違いが
+  // 別カート明細になるようoptionKeyPartに数量も含める（通常の選択肢は従来通りchoiceIdのみ）。
   const optionKeyPart = selectedOptions.length
-    ? ':opt-' + selectedOptions.map(o => o.choiceId).sort((a,b) => a-b).join(',')
+    ? ':opt-' + [...selectedOptions].sort((a,b) => a.choiceId - b.choiceId)
+        .map(o => o.quantity ? `${o.choiceId}x${o.quantity}` : String(o.choiceId))
+        .join(',')
     : '';
   const key = product.productKey + optionKeyPart;
   const finalPrice = product.ordPrice + optionsTotal;
@@ -713,7 +744,10 @@ function cartPanelHtml(){
   const lines = state.cart.map(i => {
     // 【2026-09-24・社長承認】選択したフレーバー/追加オプションをカート明細に表示する。
     const optionsText = (i.selectedOptions || [])
-      .map(o => state.lang === 'ja' ? (o.choiceLabel || o.choiceLabelEn) : (o.choiceLabelEn || o.choiceLabel))
+      .map(o => {
+        const label = state.lang === 'ja' ? (o.choiceLabel || o.choiceLabelEn) : (o.choiceLabelEn || o.choiceLabel);
+        return o.quantity != null ? `${label} × ${o.quantity}` : label;
+      })
       .join(', ');
     return `
     <div class="cart-line">
@@ -951,9 +985,30 @@ function renderProductDetail(){
   const riceSelectedForDisplay = riceGroupForDisplay ? (state.selectedOptionChoices[riceGroupForDisplay.groupId] || []).length > 0 : false;
   const optionGroupsHtml = (p.options || []).map(g => {
     if (g.type === 'RICE_BROWN' && !riceSelectedForDisplay) return '';
+    const groupLabel = state.lang === 'ja' ? g.label : (g.labelEn || g.label);
+    // 【2026-09-24・社長承認・バケット数量選択】selectionType='QUANTITY'は[−][数量][＋]の
+    // ステッパーUIで表示する。商品ごとの専用コードではなく、selectionTypeだけで分岐する。
+    if (g.selectionType === 'QUANTITY') {
+      const quantities = state.selectedOptionQuantities[g.groupId] || {};
+      return `<div class="option-box">
+        <div style="font-weight:800; color:var(--teal-dark); font-size:13px; margin-bottom:10px;">${escapeHtml(groupLabel)}</div>
+        ${g.choices.map(c => {
+          const qty = quantities[c.choiceId] || 0;
+          const choiceLabel = state.lang === 'ja' ? c.label : (c.labelEn || c.label);
+          const priceSuffix = c.priceDelta ? ` (+¥${c.priceDelta.toLocaleString()})` : '';
+          return `<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <span>${escapeHtml(choiceLabel)}${priceSuffix}</span>
+            <div style="display:flex; align-items:center; gap:12px;">
+              <button type="button" onclick='setOptionQuantity(${g.groupId}, ${c.choiceId}, ${qty - 1})' ${qty <= 0 ? 'disabled' : ''} style="width:36px;height:36px;border-radius:8px;border:1px solid var(--border);background:#fff;font-weight:800;font-size:16px;line-height:1;">−</button>
+              <span style="min-width:22px;text-align:center;font-weight:800;">${qty}</span>
+              <button type="button" onclick='setOptionQuantity(${g.groupId}, ${c.choiceId}, ${qty + 1})' style="width:36px;height:36px;border-radius:8px;border:1px solid var(--border);background:#fff;font-weight:800;font-size:16px;line-height:1;">＋</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
     const selectedIds = state.selectedOptionChoices[g.groupId]
       || (g.selectionType === 'SINGLE' && g.required && g.choices.length ? [g.choices[0].choiceId] : []);
-    const groupLabel = state.lang === 'ja' ? g.label : (g.labelEn || g.label);
     const inputType = g.selectionType === 'SINGLE' ? 'radio' : 'checkbox';
     return `<div class="option-box">
       <div style="font-weight:800; color:var(--teal-dark); font-size:13px; margin-bottom:10px;">${escapeHtml(groupLabel)}</div>
