@@ -65,11 +65,21 @@
     font-size:10px; font-weight:800; border-radius:10px; min-width:17px; height:17px;
     display:flex; align-items:center; justify-content:center; padding:0 3px; border:2px solid #fff;
   }
-  .hamburger{display:none; background:none; border:none; color:var(--teal-dark);}
+  .hamburger{
+    display:none; background:none; border:none; color:var(--teal-dark);
+    width:40px; height:40px; align-items:center; justify-content:center; border-radius:8px; flex:0 0 auto;
+  }
+  .hamburger:active{background:var(--cream-2);}
 
   @media (max-width: 900px){
     nav.main-nav{display:none;}
     .hamburger{display:flex;}
+  }
+
+  /* ---------- Mobile nav drawer（既存カートドロワーの.drawer/.drawer-overlay/.drawer-closeを流用） ---------- */
+  .mobile-nav-item{
+    display:flex; align-items:center; min-height:50px; padding:0 4px; font-family:'Poppins',sans-serif;
+    font-size:16px; font-weight:700; color:var(--teal-dark); border-bottom:1px solid var(--border);
   }
 
   /* ---------- Hero（社長提供の完成グラフィックをそのまま使用） ---------- */
@@ -278,6 +288,7 @@
 
 <div class="toast" id="toast"></div>
 <div id="drawerRoot"></div>
+<div id="mobileNavRoot"></div>
 
 <script>
 // ============================================================
@@ -445,6 +456,7 @@ const state = {
   loading: false,
   error: null,
   drawerOpen: false,
+  mobileNavOpen: false, // カートドロワー(drawerOpen)とは別管理。互いに干渉させない。
 };
 
 function t(key){ return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key; }
@@ -591,8 +603,38 @@ function closeCartDrawer(){
   state.drawerOpen = false;
   document.getElementById('drawerRoot').innerHTML = '';
 }
+// 【ハンバーガーメニュー・A案】既存のカートドロワー(.drawer/.drawer-overlay/.drawer-close)を
+// デザインそのまま流用。state.drawerOpen（カート用）とは別のstate.mobileNavOpenで管理し、
+// カートドロワーの既存動作には一切手を加えない。
 function toggleMobileNav(){
-  alert([t('navHome'),t('navRestaurants'),t('navHowToOrder'),t('navDeliveryArea'),t('navFaq')].join('\\n'));
+  if (state.mobileNavOpen) closeMobileNav();
+  else openMobileNav();
+}
+function openMobileNav(){
+  state.mobileNavOpen = true;
+  renderMobileNavIfOpen();
+}
+function closeMobileNav(){
+  state.mobileNavOpen = false;
+  document.getElementById('mobileNavRoot').innerHTML = '';
+}
+function goFromMobileNav(screen){
+  closeMobileNav();
+  go(screen);
+}
+function renderMobileNavIfOpen(){
+  const root = document.getElementById('mobileNavRoot');
+  if (!state.mobileNavOpen) { root.innerHTML = ''; return; }
+  const items = [
+    ['home', 'navHome'], ['restaurants', 'navRestaurants'], ['howToOrder', 'navHowToOrder'],
+    ['deliveryArea', 'navDeliveryArea'], ['faq', 'navFaq'],
+  ];
+  root.innerHTML = `<div class="drawer-overlay" onclick="closeMobileNav()"></div>
+    <div class="drawer">
+      <button class="drawer-close" onclick="closeMobileNav()">${ICONS.close}</button>
+      <div style="clear:both;"></div>
+      ${items.map(([screen,key]) => `<a href="#" class="mobile-nav-item" onclick="goFromMobileNav('${screen}');return false;">${t(key)}</a>`).join('')}
+    </div>`;
 }
 
 function cartPanelHtml(){
