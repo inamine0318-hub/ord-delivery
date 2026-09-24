@@ -416,6 +416,11 @@ ensureColumn('stores', 'description', 'TEXT');
 ensureColumn('stores', 'description_en', 'TEXT');
 ensureColumn('stores', 'tags', 'TEXT'); // JSON配列文字列（例:'["Vegan","Gluten-Free"]'）
 ensureColumn('stores', 'genre', 'TEXT');
+// 【2026-09-24・社長承認】店舗代表画像（外観・雰囲気を紹介する画像）用。
+// logo_urlとは完全に別管理。商品写真(products.image_reference)とも無関係。
+// 【重要】代表画像が未登録の店舗の表示仕様（④）はまだ社長未決定のため、
+// このカラムはNULL許容のまま。空表示時の挙動を勝手に確定しない。
+ensureColumn('stores', 'photo_url', 'TEXT');
 
 // 2026-09-22：加盟店手数料ゼロ方針の確定に伴うデータ修正。
 // 過去に0.15（15%）で作成された既存加盟店データを0に更新する（何度実行しても安全な冪等処理）。

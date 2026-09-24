@@ -115,10 +115,12 @@
   .card-media{aspect-ratio:4/3; background:var(--cream-2); position:relative; overflow:hidden;}
   .card-media img{width:100%; height:100%; object-fit:cover;}
   .no-photo{
-    width:100%; height:100%; display:flex; align-items:center; justify-content:center;
-    color:var(--text-soft); font-size:12px; font-weight:700; background:repeating-linear-gradient(45deg,#f3ecdd,#f3ecdd 10px,#ece2cb 10px,#ece2cb 20px);
+    width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    color:var(--teal); background:linear-gradient(150deg,var(--cream-2),#ece2cb);
     text-align:center; padding:10px;
   }
+  .no-photo .cat-tag{font-size:10px; font-weight:800; letter-spacing:1.2px; color:var(--teal); text-transform:uppercase;}
+  .no-photo svg{opacity:.55;}
   .store-logo-badge{
     position:absolute; left:14px; bottom:-20px; width:44px; height:44px; border-radius:50%;
     background:#fff; border:3px solid #fff; box-shadow:0 4px 10px rgba(0,0,0,.15);
@@ -303,7 +305,19 @@ const ICONS = {
   menu: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
   close: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   clock: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  glass: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h12l-1.5 14a3 3 0 0 1-3 2.5h-3a3 3 0 0 1-3-2.5L6 3Z"/><path d="M7 8h10"/></svg>',
+  dish: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>',
 };
+
+// 【2026-09-24・社長承認（案A）】写真がまだ無い商品は、写真枠自体は残したまま
+// カテゴリアイコン＋カテゴリ名だけを表示する（「準備中」という文言は出さない＝
+// 未完成に見えにくくする設計。写真ありの商品とカード全体の高さ・リズムを揃える）。
+function productPlaceholderHtml(p){
+  const meta = CATEGORY_META[p.category];
+  const label = meta ? (state.lang === 'ja' ? meta.ja : meta.en) : '';
+  const icon = p.category === 'DRINK' ? ICONS.glass : ICONS.dish;
+  return `<div class="no-photo">${icon}<span class="cat-tag">${escapeHtml(label)}</span></div>`;
+}
 
 // 【2026-09-24・社長提供】カテゴリアイコンはORD共通の汎用素材（/category-images）を使用する。
 // 特定加盟店(GAJIMARU等)の商品写真をORD全体のカテゴリ表示に流用しない（加盟店増加時の公平性・
@@ -321,6 +335,45 @@ const CATEGORY_META = {
 const CATEGORY_ORDER = ['ALL','RAMEN','RICE','PASTA','APPETIZER','DESSERT','DRINK','KIDS'];
 // 【2026-09-24・社長提供】ブランドヒーロー画像（英語/日本語併記の完成グラフィック）。
 const HERO_BRAND_IMAGE = '/brand-images/hero-home.jpg';
+
+// 【2026-09-24・社長指示】サイズ・提供方法違いだけの商品は、写真を2枚用意する代わりに
+// 1つの商品カードの中で選択できるようにする。ここに載っている商品キーのみをグループ化する
+// （名前の文字列を推測でパースしない。対象商品が変わった場合はここを明示的に更新する）。
+const VARIANT_GROUPS = {
+  'ORD-M001-P021': { groupId:'fries',          groupName:{ja:'ポテトフライ',ja_full:'ポテトフライ', en:'French Fries'}, variantLabel:{ja:'レギュラー',en:'Regular (R)'} },
+  'ORD-M001-P022': { groupId:'fries',          groupName:{ja:'ポテトフライ', en:'French Fries'}, variantLabel:{ja:'ラージ',en:'Large (L)'} },
+  'ORD-M001-P023': { groupId:'truffle-fries',  groupName:{ja:'トリュフポテトフライ', en:'Truffle Fries'}, variantLabel:{ja:'レギュラー',en:'Regular (R)'} },
+  'ORD-M001-P024': { groupId:'truffle-fries',  groupName:{ja:'トリュフポテトフライ', en:'Truffle Fries'}, variantLabel:{ja:'ラージ',en:'Large (L)'} },
+  'ORD-M001-P037': { groupId:'gajimaru-salad', groupName:{ja:'がじまるサラダ', en:'Gajimaru Salad'}, variantLabel:{ja:'レギュラー',en:'Regular (R)'} },
+  'ORD-M001-P038': { groupId:'gajimaru-salad', groupName:{ja:'がじまるサラダ', en:'Gajimaru Salad'}, variantLabel:{ja:'ラージ（2〜3名向け）',en:'Large (for 2-3 people)'} },
+  'ORD-M001-P047': { groupId:'enzyme-drink',   groupName:{ja:'季節の自家製酵素ジュース', en:'Seasonal Homemade Enzyme Drink'}, variantLabel:{ja:'水割り／お湯割り',en:'With Water / Hot Water'} },
+  'ORD-M001-P048': { groupId:'enzyme-drink',   groupName:{ja:'季節の自家製酵素ジュース', en:'Seasonal Homemade Enzyme Drink'}, variantLabel:{ja:'ソーダ割り',en:'With Soda'} },
+};
+function variantInfoFor(productKey){ return VARIANT_GROUPS[productKey] || null; }
+// 表示用一覧では、同じグループの2枚目以降を間引いて1枚だけ表示する
+function dedupeForDisplay(list){
+  const seenGroups = new Set();
+  const out = [];
+  for (const p of list) {
+    const info = variantInfoFor(p.productKey);
+    if (info) {
+      if (seenGroups.has(info.groupId)) continue;
+      seenGroups.add(info.groupId);
+    }
+    out.push(p);
+  }
+  return out;
+}
+// 商品詳細でサイズ・提供方法を選ぶために、同じグループの全メンバーを探す
+function findSiblingVariants(groupId){
+  const pool = state.products.length ? state.products : state.homeProducts;
+  return pool.filter(p => (variantInfoFor(p.productKey)||{}).groupId === groupId);
+}
+// 五葷抜き版そのものが独立した商品（例：きのこパスタ（五葷抜き））かどうか。
+// 見た目が通常版と同じため、価格違い・誤解防止のためカード/詳細で明示バッジを出す。
+function isStandaloneGokunNukiProduct(p){
+  return /五葷抜き/.test(p.name || '') || /No Five Pungent/i.test(p.nameEn || '');
+}
 
 const I18N = {
   en: {
@@ -346,6 +399,8 @@ const I18N = {
     loadError:'Could not load data. Please make sure the backend is running.',
     noRestaurants:'No restaurants are available for ordering right now.',
     myCart:'My Cart',
+    chooseOption:'Choose an option',
+    gokunNukiVersionBadge:'Five-Pungent-Free Version',
   },
   ja: {
     brandSub:'沖縄リゾートデリバリー',
@@ -370,6 +425,8 @@ const I18N = {
     loadError:'データを読み込めませんでした。バックエンドが起動しているかご確認ください。',
     noRestaurants:'現在ご注文いただける加盟店がありません。',
     myCart:'カート',
+    chooseOption:'サイズ・提供方法をお選びください',
+    gokunNukiVersionBadge:'五葷抜き商品',
   },
 };
 
@@ -382,6 +439,7 @@ const state = {
   homeProducts: [],
   currentCategory: 'ALL',
   currentProduct: null,
+  selectedVariantKey: null, // 商品詳細でサイズ・提供方法を選択中の場合、選択中のproductKey
   cart: [], // { key, name, nameEn, ordPrice, imageReference, qty }
   loading: false,
   error: null,
@@ -474,8 +532,12 @@ function go(screen, payload){
     state.currentCategory = 'ALL';
     loadProducts(payload.catalogStoreId);
   }
-  if (screen === 'product' && payload) state.currentProduct = payload;
+  if (screen === 'product' && payload) { state.currentProduct = payload; state.selectedVariantKey = null; }
   window.scrollTo(0, 0);
+  render();
+}
+function selectVariant(productKey){
+  state.selectedVariantKey = productKey;
   render();
 }
 
@@ -583,7 +645,7 @@ function render(){
 
 function renderHome(){
   const featuredStores = state.stores.slice(0, 4);
-  const popular = state.homeProducts.slice(0, 6);
+  const popular = dedupeForDisplay(state.homeProducts).slice(0, 6);
   return `
     <section class="hero-banner">
       <img src="${BACKEND_URL + HERO_BRAND_IMAGE}" alt="YOUR OKINAWA STAY, MADE EASY. / 沖縄の滞在を、もっと気軽に。">
@@ -636,8 +698,11 @@ function renderLoadingOrError(){
 
 function renderStoreCard(store){
   const tagsHtml = (store.tags||[]).map((tag,i) => `<span class="tag ${i%2===0?'mint':'peach'}">${escapeHtml(tag)}</span>`).join('');
-  const photoRef = state.homeProducts[0] ? state.homeProducts[0].imageReference : null;
-  const media = photoRef ? `<img src="${imageUrl(photoRef)}" alt="${escapeHtml(store.name)}">` : `<div class="no-photo">${escapeHtml(store.name)}</div>`;
+  // 【2026-09-24・社長承認】店舗代表画像は店舗専用のphotoUrlのみを参照する。
+  // 商品一覧の1番目の商品写真を代表画像として流用する仕組みは廃止した。
+  // 【未確定】photoUrlが無い店舗の最終表示仕様（④）はまだ社長未決定のため、
+  // ここでは暫定的に店舗名のみのプレースホルダーを表示し、最終デザインとして固定しない。
+  const media = store.photoUrl ? `<img src="${imageUrl(store.photoUrl)}" alt="${escapeHtml(store.name)}">` : `<div class="no-photo">${escapeHtml(store.name)}</div>`;
   const logo = store.logoUrl ? `<img src="${imageUrl(store.logoUrl)}" alt="">` : '🌿';
   return `<div class="store-card" onclick='go("menu", ${JSON.stringify(store).replace(/'/g,"&#39;")})'>
     <div class="card-media">${media}<div class="store-logo-badge">${logo}</div></div>
@@ -674,17 +739,31 @@ function renderCategoryStrip(){
 function selectCategory(catKey){ state.currentCategory = catKey; render(); }
 
 function renderProductCard(p){
-  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(p.name)}">` : `<div class="no-photo">${escapeHtml(t('noPhoto'))}</div>`;
-  const name = state.lang === 'ja' ? p.name : (p.nameEn || p.name);
+  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(p.name)}">` : productPlaceholderHtml(p);
+  const variantInfo = variantInfoFor(p.productKey);
+  const name = variantInfo ? (state.lang === 'ja' ? variantInfo.groupName.ja : variantInfo.groupName.en) : (state.lang === 'ja' ? p.name : (p.nameEn || p.name));
   const payload = JSON.stringify(p).replace(/'/g,"&#39;");
+  let priceHtml, addBtnHtml;
+  if (variantInfo) {
+    const siblings = findSiblingVariants(variantInfo.groupId);
+    const minPrice = siblings.length ? Math.min(...siblings.map(s => s.ordPrice)) : p.ordPrice;
+    priceHtml = `¥${minPrice.toLocaleString()}〜`;
+    addBtnHtml = `<button class="add-btn" onclick='event.stopPropagation();go("product", ${payload})'>${ICONS.plus}</button>`;
+  } else {
+    priceHtml = `¥${p.ordPrice.toLocaleString()}`;
+    addBtnHtml = `<button class="add-btn" onclick='event.stopPropagation();addToCart(${payload})'>${ICONS.plus}</button>`;
+  }
+  const badges = [];
+  if (isStandaloneGokunNukiProduct(p)) badges.push(`<span class="tag peach">${escapeHtml(t('gokunNukiVersionBadge'))}</span>`);
+  else if (p.gokunNukiAvailable) badges.push(`<span class="tag mint">${escapeHtml(t('noFivePungent'))}</span>`);
   return `<div class="product-card">
     <div class="card-media" onclick='go("product", ${payload})' style="cursor:pointer;">${img}</div>
     <div class="card-body">
       <h3 onclick='go("product", ${payload})' style="cursor:pointer;">${escapeHtml(name)}</h3>
-      ${p.gokunNukiAvailable ? `<div class="tag-row"><span class="tag mint">${escapeHtml(t('noFivePungent'))}</span></div>` : ''}
+      ${badges.length ? `<div class="tag-row">${badges.join('')}</div>` : ''}
       <div class="price-row">
-        <span class="price">¥${p.ordPrice.toLocaleString()}</span>
-        <button class="add-btn" onclick='event.stopPropagation();addToCart(${payload})'>${ICONS.plus}</button>
+        <span class="price">${priceHtml}</span>
+        ${addBtnHtml}
       </div>
     </div>
   </div>`;
@@ -692,7 +771,7 @@ function renderProductCard(p){
 
 function renderMenu(){
   if (!state.currentStore) { go('restaurants'); return ''; }
-  const filtered = state.currentCategory === 'ALL' ? state.products : state.products.filter(p => p.category === state.currentCategory);
+  const filtered = dedupeForDisplay(state.currentCategory === 'ALL' ? state.products : state.products.filter(p => p.category === state.currentCategory));
   return `
     <div class="content-with-cart" style="padding-top:24px;">
       <div class="main-col">
@@ -708,12 +787,33 @@ function renderMenu(){
 }
 
 function renderProductDetail(){
-  const p = state.currentProduct;
-  if (!p) { go('restaurants'); return ''; }
-  const name = state.lang === 'ja' ? p.name : (p.nameEn || p.name);
+  const anchor = state.currentProduct;
+  if (!anchor) { go('restaurants'); return ''; }
+  const variantInfo = variantInfoFor(anchor.productKey);
+  const siblings = variantInfo ? findSiblingVariants(variantInfo.groupId) : [];
+  const p = variantInfo ? (siblings.find(s => s.productKey === state.selectedVariantKey) || anchor) : anchor;
+
+  const name = variantInfo ? (state.lang === 'ja' ? variantInfo.groupName.ja : variantInfo.groupName.en) : (state.lang === 'ja' ? p.name : (p.nameEn || p.name));
   const desc = state.lang === 'ja' ? p.description : (p.descriptionEn || p.description);
-  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(name)}">` : `<div class="no-photo">${escapeHtml(t('noPhoto'))}</div>`;
+  const img = p.imageReference ? `<img src="${imageUrl(p.imageReference)}" alt="${escapeHtml(name)}">` : productPlaceholderHtml(p);
   const payload = JSON.stringify(p).replace(/'/g,"&#39;");
+
+  const badges = [];
+  if (isStandaloneGokunNukiProduct(p)) badges.push(`<span class="tag peach">${escapeHtml(t('gokunNukiVersionBadge'))}</span>`);
+
+  const variantSelectorHtml = variantInfo ? `
+    <div class="option-box">
+      <div style="font-weight:800; color:var(--teal-dark); font-size:13px; margin-bottom:10px;">${escapeHtml(t('chooseOption'))}</div>
+      ${siblings.map(s => {
+        const info = variantInfoFor(s.productKey);
+        const label = state.lang === 'ja' ? info.variantLabel.ja : info.variantLabel.en;
+        return `<label style="margin-bottom:8px;">
+          <input type="radio" name="variantChoice" value="${s.productKey}" ${s.productKey === p.productKey ? 'checked' : ''} onchange='selectVariant("${s.productKey}")'>
+          <span>${escapeHtml(label)} — ¥${s.ordPrice.toLocaleString()}</span>
+        </label>`;
+      }).join('')}
+    </div>` : '';
+
   return `
     <div class="content-with-cart" style="padding-top:24px;">
       <div class="main-col">
@@ -723,8 +823,10 @@ function renderProductDetail(){
           <div class="detail-info">
             <h1>${escapeHtml(name)}</h1>
             ${state.lang !== 'ja' && p.name !== name ? `<div class="en">${escapeHtml(p.name)}</div>` : ''}
+            ${badges.length ? `<div class="tag-row" style="margin-bottom:6px;">${badges.join('')}</div>` : ''}
             <div class="detail-price">¥${p.ordPrice.toLocaleString()}</div>
             ${desc ? `<p class="detail-desc">${escapeHtml(desc)}</p>` : ''}
+            ${variantSelectorHtml}
             ${p.gokunNukiAvailable ? `<div class="option-box"><label><input type="checkbox" id="gokunNukiCheckbox"> ${escapeHtml(t('noFivePungent'))}</label></div>` : ''}
             <button class="primary-btn" onclick='addToCart(${payload}, document.getElementById("gokunNukiCheckbox")?document.getElementById("gokunNukiCheckbox").checked:false)'>${ICONS.cartWhite} ${t('addToCart')}</button>
           </div>
