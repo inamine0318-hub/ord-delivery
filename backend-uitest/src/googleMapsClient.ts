@@ -31,6 +31,150 @@ export interface LatLng {
   readonly longitude: number;
 }
 
+// ============================================================
+// 【Phase 1.2基盤】Place ID存在確認（Google回答待ちの「Place Details表示」機能とは無関係）。
+// fields=idのみを指定したPlace Details (New)呼び出しは、Google公式料金表上
+// 常に無償（Places API Place Details Essentials (IDs Only) / Places Details - ID Refresh SKU、
+// Free Usage Cap Unlimited）である。ここでは施設名・住所などの表示用データは一切取得・
+// 返却しない。あくまで「保存済みPlace IDが現在Googleで解決できるか」だけを確認する。
+// 【重要】VALID＝Place IDが解決できることの確認であり、施設が営業中であることの
+// 保証ではない（vFinal確定事項）。
+// ============================================================
+export type PlaceIdCheckStatus = 'VALID' | 'NEEDS_CHECK' | 'UNKNOWN';
+
+// ============================================================
+// 【Phase B・2026-09-25社長承認】顧客向けGoogle施設検索（Autocomplete New）とPlace Details
+// プレビュー取得。いずれもGoogle由来の施設名・住所をDBへ保存する処理は一切含まない
+// （呼び出し側がその場限りの表示にのみ使うことを前提とする）。
+// ============================================================
+
+export interface AutocompleteSuggestion {
+  placeId: string;
+  text: string;
+}
+
+// Autocomplete (New)。sessionTokenは呼び出し側（クライアント）が生成したv4 UUIDをそのまま
+// 中継するだけで、DBへの保存は行わない。includedPrimaryTypes等の絞り込みは今回意図的に
+// 指定しない（villa/hotel/resort/condominium/住所等、幅広い入力に対応するため。
+// 社長指示：「ホテルだけに限定しない」）。
+export async function searchAutocomplete(
+  input: string,
+  sessionToken: string,
+  apiKey: string = GOOGLE_MAPS_API_KEY
+): Promise<{ status: 'SUCCESS' | 'API_ERROR' | 'NOT_ATTEMPTED'; suggestions: AutocompleteSuggestion[] }> {
+  if (!isGoogleMapsConfigured(apiKey)) {
+    return { status: 'NOT_ATTEMPTED', suggestions: [] };
+  }
+  if (!input || !sessionToken) {
+    return { status: 'API_ERROR', suggestions: [] };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        // 必要最小限のフィールドのみ（ワイルドカード禁止、既存方針を踏襲）。
+        'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
+      },
+      body: JSON.stringify({ input, sessionToken, regionCode: 'JP' }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return { status: 'API_ERROR', suggestions: [] };
+    const json = await res.json().catch(() => null);
+    const rawSuggestions: any[] = Array.isArray(json?.suggestions) ? json.suggestions : [];
+    const suggestions: AutocompleteSuggestion[] = rawSuggestions
+      .map(s => s?.placePrediction)
+      .filter((p: any) => p && typeof p.placeId === 'string' && typeof p.text?.text === 'string')
+      .map((p: any) => ({ placeId: p.placeId, text: p.text.text }));
+    return { status: 'SUCCESS', suggestions };
+  } catch {
+    return { status: 'API_ERROR', suggestions: [] };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export interface PlaceDetailsPreview {
+  placeId: string;
+  name: string;
+  address: string;
+}
+
+// Place Details (New)。sessionTokenを付与してAutocompleteセッションを完結させる。
+// 【重要】ここで取得したname/address/locationはDBへ保存しない（preview表示専用、呼び出し側の責務）。
+// displayNameを含めるためProティア課金になる（2026-09-25時点の設計判断：候補一覧の
+// Autocomplete text由来の名称ではなく、確認画面では正確性を優先しPlace Details由来の
+// displayNameを都度取得する。コスト最適化のため候補表示のtextを再利用する代替案もあるが、
+// 顧客の最終確認画面での正確性を優先した。社長確認事項として報告する）。
+export async function fetchPlaceDetailsForPreview(
+  placeId: string,
+  sessionToken: string,
+  apiKey: string = GOOGLE_MAPS_API_KEY
+): Promise<{ status: 'SUCCESS' | 'NOT_FOUND' | 'INVALID_REQUEST' | 'API_ERROR' | 'NOT_ATTEMPTED'; result: PlaceDetailsPreview | null }> {
+  if (!isGoogleMapsConfigured(apiKey)) {
+    return { status: 'NOT_ATTEMPTED', result: null };
+  }
+  if (!placeId) {
+    return { status: 'INVALID_REQUEST', result: null };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?sessionToken=${encodeURIComponent(sessionToken)}&key=${apiKey}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-Goog-FieldMask': 'id,displayName,formattedAddress' },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return { status: 'NOT_FOUND', result: null };
+    if (res.status === 400) return { status: 'INVALID_REQUEST', result: null };
+    if (!res.ok) return { status: 'API_ERROR', result: null };
+    const json = await res.json().catch(() => null);
+    const name = json?.displayName?.text;
+    const address = json?.formattedAddress;
+    if (typeof name !== 'string' || typeof address !== 'string') {
+      return { status: 'API_ERROR', result: null };
+    }
+    return { status: 'SUCCESS', result: { placeId, name, address } };
+  } catch {
+    return { status: 'API_ERROR', result: null };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function checkPlaceIdExists(
+  placeId: string,
+  apiKey: string = GOOGLE_MAPS_API_KEY
+): Promise<PlaceIdCheckStatus> {
+  if (!isGoogleMapsConfigured(apiKey) || !placeId) {
+    // APIキー未設定・Place ID未指定はいずれも「確認できなかった」として扱い、
+    // 施設側の問題であるかのようなNEEDS_CHECKにはしない。
+    return 'UNKNOWN';
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=id&key=${apiKey}`;
+    const res = await fetch(url, { method: 'GET', signal: controller.signal });
+    if (res.ok) return 'VALID';
+    // NOT_FOUND(404)＝obsoleteなPlace ID、INVALID_REQUEST(400)＝不正なPlace ID文字列。
+    // いずれも「この施設情報の要確認」として扱う（Google公式Place ID Guideの定義に基づく）。
+    if (res.status === 404 || res.status === 400) return 'NEEDS_CHECK';
+    // それ以外（5xx等）はGoogle側の一時的な障害の可能性が高く、施設固有の問題とは
+    // 区別してUNKNOWN（判定保留）とする。
+    return 'UNKNOWN';
+  } catch {
+    // タイムアウト・ネットワークエラー等も施設固有の問題ではないためUNKNOWNとする。
+    return 'UNKNOWN';
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export type RouteLookupStatus = 'SUCCESS' | 'API_ERROR' | 'NO_ROUTE' | 'INVALID_LOCATION' | 'NOT_ATTEMPTED';
 
 export interface RouteLookupResult {
@@ -203,15 +347,61 @@ function toWaypoint(point: LatLng) {
   return { location: { latLng: { latitude: point.latitude, longitude: point.longitude } } };
 }
 
+// 【Place ID→Routes接続・社長承認】Google Routes APIのWaypointは、location/placeId/address/
+// navigationPointTokenが相互排他的なフィールドとして同じ階層に定義されている（Google公式
+// リファレンス確認済み）。destination側でPlace IDが確定している場合に使用する。
+function toPlaceIdWaypoint(placeId: string) {
+  return { placeId };
+}
+
 // 実際のGoogle Routes API呼び出し（Compute Routes）。restaurant→customerの1経路のみ。
-async function callComputeRoutes(origin: LatLng, destination: LatLng, departureTime: Date): Promise<RouteLookupResult> {
-  const fieldMask = 'routes.duration,routes.distanceMeters'; // 必要最小限（ワイルドカード禁止）
+// 【2026-09-25・社長承認・staticDuration切替】ORDの配送料・最低注文額判定は「加盟店→配送先の
+// 標準的な車移動時間」を基準とする方針であり、リアルタイム交通状況で料金区分を変動させない。
+// そのため料金判定に使う値をroute.duration（TRAFFIC_AWARE_OPTIMAL時は交通状況を考慮した予測値）
+// からroute.staticDuration（交通状況を考慮しない値）へ変更する。routingPreferenceは
+// TRAFFIC_AWARE_OPTIMALのまま維持（社長指示）。
+//
+// departureTime引数は、既存呼び出し元(resolveRestaurantToCustomerPricing等)のAPI互換性を
+// 保つため関数シグネチャ上は残すが、Googleへの実際の送信は行わない。理由：
+// (1) staticDurationはdepartureTimeの値に依存しないことを実測で確認済み（同一区間で複数の
+//     未来時刻を指定してもstaticDurationは常に同一値）
+// (2) departureTimeを送信する場合はGoogle仕様上「未来の時刻」でなければならず
+//     （DRIVEモードで過去時刻はエラー）、new Date()をそのまま渡すとネットワーク遅延により
+//     Google到達時点で過去時刻扱いとなり400 INVALID_ARGUMENTになる不具合が実際に発生していた
+// (3) departureTimeを省略した場合はGoogle側がリクエスト受信時刻を既定値として扱うため、
+//     この不具合自体が発生しなくなることを実測で確認済み（HTTP 200成功）
+// 「Google Maps一般向け画面の表示時間とstaticDurationが完全に同一」とは断定しない。ORDでは
+// 「交通状況を考慮しないGoogle RoutesのstaticDurationを、加盟店→配送先の標準的な車移動時間
+// として料金判定に使用する」という独自定義として扱う。
+// 【Place ID→Routes接続・社長承認】destinationPlaceIdは末尾の任意引数として追加する
+// （既存呼び出し元のシグネチャ・座標方式を一切変更しない）。指定があればPlace ID方式、
+// なければ従来どおり destination（LatLng）を使用する。origin（加盟店）は常にLatLngのまま
+// （社長指示：出発地点は座標方式を維持する）。
+async function callComputeRoutes(
+  origin: LatLng,
+  destination: LatLng | null,
+  _departureTime: Date,
+  destinationPlaceId?: string | null
+): Promise<RouteLookupResult> {
+  const destinationWaypoint = destinationPlaceId
+    ? toPlaceIdWaypoint(destinationPlaceId)
+    : destination
+      ? toWaypoint(destination)
+      : null;
+  if (!destinationWaypoint) {
+    // 呼び出し側(computeRestaurantToCustomerRoute)で既に検証済みのはずだが、
+    // 念のためここでも推測値を作らず安全側に倒す。
+    return { status: 'INVALID_LOCATION', durationMinutes: null, distanceKm: null };
+  }
+  // routes.durationは将来の交通状況参考値としての利用可能性を残すため取得のみ行い、
+  // 現時点ではRouteLookupResultには含めない（API/DBを不必要に拡張しない、社長指示）。
+  const fieldMask = 'routes.duration,routes.staticDuration,routes.distanceMeters';
   const body = {
     origin: toWaypoint(origin),
-    destination: toWaypoint(destination),
+    destination: destinationWaypoint,
     travelMode: 'DRIVE',
-    routingPreference: 'TRAFFIC_AWARE_OPTIMAL', // 料金確定に使うため精度優先
-    departureTime: departureTime.toISOString(), // RFC3339 UTC("Zulu")形式
+    routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+    // departureTimeは意図的に送信しない（上記コメント参照）。
   };
 
   const result = await fetchGoogleRoutesApi(ROUTES_COMPUTE_ROUTES_URL, fieldMask, body);
@@ -224,7 +414,8 @@ async function callComputeRoutes(origin: LatLng, destination: LatLng, departureT
     return { status: 'NO_ROUTE', durationMinutes: null, distanceKm: null };
   }
   const route = routes[0];
-  const durationMinutes = parseDurationSecondsToMinutes(route?.duration);
+  // 料金判定に使うのはstaticDuration（交通状況を考慮しない標準的な移動時間）。
+  const durationMinutes = parseDurationSecondsToMinutes(route?.staticDuration);
   const distanceKm = metersToKm(route?.distanceMeters);
   if (durationMinutes === null || distanceKm === null) {
     // レスポンス形状が想定と異なる場合も推測値を作らずエラー扱いにする。
@@ -282,23 +473,30 @@ async function callComputeRouteMatrix(
 
 // restaurant → customer の走行時間・距離を取得する（Delivery Fee/Minimum Order/Driver Rewardの基準）。
 // 【重要】driver base → restaurant とは完全に別の区間・別の関数であり、絶対に混同しないこと。
+// 【Place ID→Routes接続・社長承認】destinationPlaceIdは末尾の任意引数。
+// originは従来どおり必ずLatLngが必須（加盟店側はPlace ID化しない、社長指示）。
+// destinationは「有効なPlace IDがある」または「有効な座標がある」のいずれかを満たせばよい。
+// 両方とも無い場合は、従来どおりINVALID_LOCATIONとして扱う（推測しない）。
 export async function computeRestaurantToCustomerRoute(
   origin: LatLng | null,
   destination: LatLng | null,
-  departureTime: Date
+  departureTime: Date,
+  destinationPlaceId?: string | null
 ): Promise<RouteLookupResult> {
   if (!isGoogleMapsConfigured()) {
     // APIキー未設定：推測せず、そもそも問い合わせを試みない。
     return { status: 'NOT_ATTEMPTED', durationMinutes: null, distanceKm: null };
   }
-  if (!isValidLatLng(origin) || !isValidLatLng(destination)) {
-    // 店舗または宿泊施設の座標が未確定/不正：AREA_COORDS等へのフォールバックは行わない。
+  if (!isValidLatLng(origin)) {
+    // 店舗（加盟店）の座標が未確定/不正：AREA_COORDS等へのフォールバックは行わない。
     return { status: 'INVALID_LOCATION', durationMinutes: null, distanceKm: null };
   }
-  // ここに到達するのはAPIキー設定済み・座標が両方とも妥当な場合のみ。
-  // 実際の通信は次STEPで実装するため、現時点ではこの関数がこの先へ進むことはない
-  // （テスト環境・現状のORDにはGOOGLE_MAPS_API_KEYが未設定のため、上のNOT_ATTEMPTEDで必ず止まる）。
-  return callComputeRoutes(origin, destination, departureTime);
+  const hasValidDestinationPlaceId = typeof destinationPlaceId === 'string' && destinationPlaceId.trim().length > 0;
+  if (!isValidLatLng(destination) && !hasValidDestinationPlaceId) {
+    // 宿泊施設の座標・Place IDのいずれも未確定/不正：従来どおりINVALID_LOCATION。
+    return { status: 'INVALID_LOCATION', durationMinutes: null, distanceKm: null };
+  }
+  return callComputeRoutes(origin, destination, departureTime, hasValidDestinationPlaceId ? destinationPlaceId : null);
 }
 
 // driver base → restaurant の距離（必要なら時間も）を取得する（Remote Dispatch Bonusの判定根拠）。

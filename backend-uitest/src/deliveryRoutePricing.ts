@@ -35,14 +35,18 @@ export interface RestaurantToCustomerPricingResult {
 // restaurant → customer の実走行時間から、配送料・最低注文額を判定する。
 // 【重要】routeLookup引数はテストでの依存注入用（デフォルトは実際のgoogleMapsClient.tsの実装）。
 // 実運用では省略してよい。
+// 【Place ID→Routes接続・社長承認】customerPlaceIdは末尾の任意引数。宿泊施設にPlace IDが
+// あればそちらを優先してGoogle Routesへ渡す（customerLocationが未確定/NULLでも計算可能にする）。
+// Place ID→Routes→staticDuration→pricing_rulesという既存の料金計算の流れ自体は変更しない。
 export async function resolveRestaurantToCustomerPricing(
   db: DatabaseSync,
   restaurantLocation: LatLng | null,
   customerLocation: LatLng | null,
   departureTime: Date,
-  routeLookup: typeof computeRestaurantToCustomerRoute = computeRestaurantToCustomerRoute
+  routeLookup: typeof computeRestaurantToCustomerRoute = computeRestaurantToCustomerRoute,
+  customerPlaceId?: string | null
 ): Promise<RestaurantToCustomerPricingResult> {
-  const route = await routeLookup(restaurantLocation, customerLocation, departureTime);
+  const route = await routeLookup(restaurantLocation, customerLocation, departureTime, customerPlaceId);
 
   if (route.status !== 'SUCCESS' || route.durationMinutes === null) {
     // 座標未確定(INVALID_LOCATION)・APIキー未設定(NOT_ATTEMPTED)・API失敗(API_ERROR/NO_ROUTE)、

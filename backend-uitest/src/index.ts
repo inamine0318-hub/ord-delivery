@@ -31,6 +31,8 @@ import { tryMarkWebhookEventProcessed, runInTransaction } from './webhookEvents'
 import { calculateDriverReward, calculateDeliveryFee, calculateMinimumOrder, checkMinimumOrder } from './pricingRules';
 import { resolveRestaurantToCustomerPricing, resolveDriverToRestaurantPricing } from './deliveryRoutePricing';
 import type { LatLng } from './googleMapsClient';
+import { checkPlaceIdExists, searchAutocomplete, fetchPlaceDetailsForPreview } from './googleMapsClient';
+import { issuePreviewToken, verifyPreviewToken, matchesSessionToken } from './previewToken';
 
 const app = express();
 app.use(cors({ credentials: true, origin: true }));
@@ -181,6 +183,9 @@ interface Order {
   paymentStatus: PaymentStatus; // 決済状態（Order Statusとは別軸）
   paymentAttemptNo: number; // 決済試行回数（再決済のたびに増分、idempotencyKey生成に使用予定）
   paymentLinkId: string; // Square Payment LinkのID（未発行の間は空文字）
+  paymentLinkUrl: string | null; // 【Phase A】Square Payment LinkのURL。冪等な再送時の再返却に使用
+  idempotencyKey: string | null; // 【Phase A】クライアント生成のcheckout冪等性キー（任意項目）
+  idempotencyContentHash: string | null; // 【Phase A】同一キーでの内容一致確認用ハッシュ
   accommodationId: string | null; // 宿泊施設ID（accommodations.id、例:'h1'）。Phase B
   accommodationLatitude: number | null; // 注文時点の宿泊施設座標のsnapshot。マスター変更の影響を受けない
   accommodationLongitude: number | null;
@@ -273,6 +278,9 @@ interface OrderRow {
   payment_status: string;
   payment_attempt_no: number;
   payment_link_id: string;
+  payment_link_url: string | null;
+  idempotency_key: string | null;
+  idempotency_content_hash: string | null;
   accommodation_id: string | null;
   accommodation_latitude: number | null;
   accommodation_longitude: number | null;
@@ -328,6 +336,9 @@ const rowToOrder = (r: OrderRow): Order => ({
   paymentStatus: (r.payment_status as PaymentStatus) || 'PENDING',
   paymentAttemptNo: r.payment_attempt_no,
   paymentLinkId: r.payment_link_id || '',
+  paymentLinkUrl: r.payment_link_url,
+  idempotencyKey: r.idempotency_key,
+  idempotencyContentHash: r.idempotency_content_hash,
   accommodationId: r.accommodation_id,
   accommodationLatitude: r.accommodation_latitude,
   accommodationLongitude: r.accommodation_longitude,
@@ -421,11 +432,13 @@ function getOrderById(id: number): Order | undefined {
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as OrderRow | undefined;
   return row ? rowToOrder(row) : undefined;
 }
+// 【Phase A】idempotency_keyのUNIQUE制約違反時は、呼び出し側でこの例外を捕捉し、
+// 既存注文を再取得して返す設計とする（insertOrder自体は例外を投げるだけで揉み消さない）。
 function insertOrder(o: Omit<Order, 'id' | 'completedAt'>): Order {
   const info = db
     .prepare(
-      `INSERT INTO orders (square_order_id, items_json, villa_name, room_number, status, store_id, driver_id, created_at, customer_line_id, total_money_json, area, display_no, payment_status, payment_attempt_no, payment_link_id, accommodation_id, accommodation_latitude, accommodation_longitude, building_villa_number, guest_name, phone_number, delivery_location, delivery_instructions, delivery_time_minutes, driver_reward, delivery_fee, estimated_ord_profit)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO orders (square_order_id, items_json, villa_name, room_number, status, store_id, driver_id, created_at, customer_line_id, total_money_json, area, display_no, payment_status, payment_attempt_no, payment_link_id, payment_link_url, idempotency_key, idempotency_content_hash, accommodation_id, accommodation_latitude, accommodation_longitude, building_villa_number, guest_name, phone_number, delivery_location, delivery_instructions, delivery_time_minutes, driver_reward, delivery_fee, estimated_ord_profit)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       o.squareOrderId,
@@ -443,6 +456,9 @@ function insertOrder(o: Omit<Order, 'id' | 'completedAt'>): Order {
       o.paymentStatus,
       o.paymentAttemptNo,
       o.paymentLinkId,
+      o.paymentLinkUrl,
+      o.idempotencyKey,
+      o.idempotencyContentHash,
       o.accommodationId,
       o.accommodationLatitude,
       o.accommodationLongitude,
@@ -457,6 +473,11 @@ function insertOrder(o: Omit<Order, 'id' | 'completedAt'>): Order {
       o.estimatedOrdProfit
     );
   return { ...o, id: Number(info.lastInsertRowid), completedAt: null };
+}
+// 【Phase A】idempotency_keyから既存注文を検索する。
+function getOrderByIdempotencyKey(key: string): Order | undefined {
+  const row = db.prepare('SELECT * FROM orders WHERE idempotency_key = ?').get(key) as OrderRow | undefined;
+  return row ? rowToOrder(row) : undefined;
 }
 // catalog_store_id（priceCatalog.tsのstoreId、例:'s1'）からstores.idを解決する（Phase B）。
 // 【重要】顧客ブラウザから送信されたstore_idは一切信用しない。商品マスターから解決した
@@ -474,16 +495,24 @@ function getStoreByCatalogId(catalogStoreId: string): StoreResolution | undefine
 }
 // accommodation_idの実在確認（Phase B）。存在しない/非activeな場合はundefinedを返す責務は
 // 呼び出し側に持たせ、この関数自体は生データを返すだけにする。
+// 【Phase 1.2】order_availableを追加。checkout/delivery-estimateの利用可否判定は
+// active（顧客候補として表示するか）ではなくorder_available（今回の注文に使えるか）で行う
+// （vFinal仕様確定事項。active=OFFの場合はorder_availableも必ず0に連動しているため、
+// 実質的にactive=OFFの施設が誤って利用可能になることはない）。
+// 【Place ID→Routes接続・社長承認】place_idを追加取得する。既存のactive/order_available判定・
+// 座標検証ロジックには一切影響しない（呼び出し側が新たにplace_idを参照するだけ）。
 interface AccommodationResolution {
   id: string;
   active: number;
+  order_available: number;
   latitude: number | null;
   longitude: number | null;
+  place_id: string | null;
 }
 function getAccommodationById(id: string): AccommodationResolution | undefined {
-  return db.prepare('SELECT id, active, latitude, longitude FROM accommodations WHERE id = ?').get(id) as
-    | AccommodationResolution
-    | undefined;
+  return db
+    .prepare('SELECT id, active, order_available, latitude, longitude, place_id FROM accommodations WHERE id = ?')
+    .get(id) as AccommodationResolution | undefined;
 }
 
 // ============================================================
@@ -498,9 +527,19 @@ interface AccommodationRow {
   address: string | null;
   latitude: number | null;
   longitude: number | null;
+  place_id: string | null;
   location_source: string | null;
   location_updated_at: string | null;
   active: number;
+  order_available: number;
+  attention_flag: number;
+  review_status: string;
+  duplicate_of_id: string | null;
+  place_id_status: string | null;
+  place_id_checked_at: string | null;
+  first_order_at: string | null;
+  last_order_at: string | null;
+  order_count: number;
 }
 interface Accommodation {
   id: string;
@@ -509,9 +548,19 @@ interface Accommodation {
   address: string | null;
   latitude: number | null;
   longitude: number | null;
+  placeId: string | null;
   locationSource: string | null;
   locationUpdatedAt: string | null;
-  active: number; // 1=新規注文時に選択可能, 0=選択不可
+  active: number; // 1=顧客候補として表示可能, 0=表示しない
+  orderAvailable: number; // 1=現在の注文に利用可能, 0=利用不可（vFinal: order_available）
+  attentionFlag: number; // 1=配送実務上の内部注意事項あり（顧客候補表示・注文可否には影響しない）
+  reviewStatus: string; // 'NEW' | 'REVIEWED'（社長が一度でも確認したか）
+  duplicateOfId: string | null; // 重複候補の参照先ORD内部ID（自動統合はしない）
+  placeIdStatus: string | null; // 'VALID' | 'NEEDS_CHECK' | 'UNKNOWN' | null（未確認）
+  placeIdCheckedAt: string | null;
+  firstOrderAt: string | null;
+  lastOrderAt: string | null;
+  orderCount: number;
 }
 const rowToAccommodation = (r: AccommodationRow): Accommodation => ({
   id: r.id,
@@ -520,9 +569,19 @@ const rowToAccommodation = (r: AccommodationRow): Accommodation => ({
   address: r.address,
   latitude: r.latitude,
   longitude: r.longitude,
+  placeId: r.place_id,
   locationSource: r.location_source,
   locationUpdatedAt: r.location_updated_at,
   active: r.active,
+  orderAvailable: r.order_available,
+  attentionFlag: r.attention_flag,
+  reviewStatus: r.review_status,
+  duplicateOfId: r.duplicate_of_id,
+  placeIdStatus: r.place_id_status,
+  placeIdCheckedAt: r.place_id_checked_at,
+  firstOrderAt: r.first_order_at,
+  lastOrderAt: r.last_order_at,
+  orderCount: r.order_count,
 });
 function getAllAccommodations(): Accommodation[] {
   return (db.prepare('SELECT * FROM accommodations ORDER BY id').all() as unknown as AccommodationRow[]).map(rowToAccommodation);
@@ -531,9 +590,130 @@ function getAccommodationDetail(id: string): Accommodation | undefined {
   const row = db.prepare('SELECT * FROM accommodations WHERE id = ?').get(id) as AccommodationRow | undefined;
   return row ? rowToAccommodation(row) : undefined;
 }
-// active切り替えのみ。物理削除・座標更新機能はPhase B-3のスコープ外のため用意しない。
+// active切り替え。
+// 【Phase 1.2・vFinal確定事項】「active=OFF + order_available=ON」は禁止状態のため、
+// activeをOFFにする瞬間、order_availableも必ず同時にOFFへ連動させる（サーバー側で強制）。
+// active をONにする操作はorder_availableには一切影響しない（両者は独立した軸のため、
+// 再度ONにしたからといって注文利用可否まで自動で戻さない。必要ならorder_available側を
+// 別途明示的にONにする）。
 function updateAccommodationActive(id: string, active: boolean): Accommodation | undefined {
-  db.prepare('UPDATE accommodations SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+  if (active) {
+    db.prepare('UPDATE accommodations SET active = 1 WHERE id = ?').run(id);
+  } else {
+    db.prepare('UPDATE accommodations SET active = 0, order_available = 0 WHERE id = ?').run(id);
+  }
+  return getAccommodationDetail(id);
+}
+// order_available切り替え。
+// 【重要】active=OFFの施設をorder_available=ONにすることは禁止状態を作るため拒否する
+// （呼び出し側にエラーを返す。無視して片方だけ書き換えることはしない）。
+function updateAccommodationOrderAvailable(id: string, orderAvailable: boolean): Accommodation | undefined {
+  const existing = getAccommodationDetail(id);
+  if (!existing) return undefined;
+  if (orderAvailable && !existing.active) {
+    throw new Error('ORDER_AVAILABLE_REQUIRES_ACTIVE');
+  }
+  db.prepare('UPDATE accommodations SET order_available = ? WHERE id = ?').run(orderAvailable ? 1 : 0, id);
+  return getAccommodationDetail(id);
+}
+// Place ID存在確認結果の反映。attention_flag/review_statusとは独立した軸であり、
+// このステータス単体でorder_availableを変更することはない（NEEDS_CHECK/UNKNOWNのいずれであっても
+// 自動で注文停止にはしない。vFinal確定事項）。
+function updateAccommodationPlaceIdStatus(id: string, status: 'VALID' | 'NEEDS_CHECK' | 'UNKNOWN'): Accommodation | undefined {
+  db.prepare('UPDATE accommodations SET place_id_status = ?, place_id_checked_at = ? WHERE id = ?').run(
+    status,
+    new Date().toISOString(),
+    id
+  );
+  return getAccommodationDetail(id);
+}
+// 【2026-09-25・社長承認・Phase 1】宿泊施設マスタの新規登録。activeは指定せず常にDEFAULT(0)の
+// ままとし、座標を確認したうえで既存のupdateAccommodationActive()で明示的に有効化する運用とする
+// （「座標未確定の間はactive=0」という既存ルールを、登録時にも自動判定で壊さないため）。
+interface AccommodationInput {
+  name?: string;
+  area?: string;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  placeId?: string | null;
+}
+function createAccommodation(id: string, input: AccommodationInput): Accommodation {
+  db.prepare(
+    `INSERT INTO accommodations (id, name, area, address, latitude, longitude, place_id, location_source, location_updated_at, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'MANUAL', ?, 0)`
+  ).run(
+    id,
+    input.name ?? '',
+    input.area ?? '',
+    input.address ?? null,
+    input.latitude ?? null,
+    input.longitude ?? null,
+    input.placeId ?? null,
+    new Date().toISOString()
+  );
+  return getAccommodationDetail(id)!;
+}
+
+function getAccommodationByPlaceId(placeId: string): Accommodation | undefined {
+  const row = db.prepare('SELECT * FROM accommodations WHERE place_id = ?').get(placeId) as AccommodationRow | undefined;
+  return row ? rowToAccommodation(row) : undefined;
+}
+
+// 【Phase B・2026-09-25社長承認】顧客のconfirm操作専用の新規登録。既存のcreateAccommodation()
+// （ADMIN用、activeは常にDEFAULT(0)で登録＝管理者の手動有効化を前提とする設計）とは
+// 意図的に別関数として分離する。顧客confirm経由の新規施設は、社長の事前承認を要求せず
+// 即時にactive=1・order_available=1とする（vFinal確定仕様）。
+// Google由来の施設名・住所（name/area/address/latitude/longitude）は一切書き込まない
+// （name/areaは既存スキーマ上NOT NULLのため、空文字で登録する＝createAccommodation()と同じ扱い）。
+// race condition対策：place_idのUNIQUE制約（idx_accommodations_place_id_unique）へのINSERT
+// 失敗を呼び出し側で捕捉し、既存レコードを再取得して返す設計とする（このinsert関数自体は
+// 例外を投げるだけで揉み消さない）。
+function insertAccommodationFromConfirmedPlaceId(id: string, placeId: string): Accommodation {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO accommodations
+       (id, name, area, place_id, location_source, location_updated_at, active, order_available, review_status, attention_flag, place_id_status, place_id_checked_at)
+     VALUES (?, '', '', ?, 'GOOGLE_PLACE_ID', ?, 1, 1, 'NEW', 0, 'VALID', ?)`
+  ).run(id, placeId, now, now);
+  return getAccommodationDetail(id)!;
+}
+
+// place_idからORD内部の施設を解決する。既存があればそれを再利用し、なければ新規作成する。
+// 同時に2件のconfirmが同じ新規Place IDを処理した場合、UNIQUE制約違反を捕捉して
+// 先に成功した側のレコードへ収束させる（accommodationsに2件作られることを防ぐ）。
+function findOrCreateAccommodationByPlaceId(placeId: string): Accommodation {
+  const existing = getAccommodationByPlaceId(placeId);
+  if (existing) return existing;
+  const newId = `ACC-${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    return insertAccommodationFromConfirmedPlaceId(newId, placeId);
+  } catch (e) {
+    const isPlaceIdConflict = e instanceof Error && e.message.includes('place_id');
+    if (!isPlaceIdConflict) throw e;
+    const winner = getAccommodationByPlaceId(placeId);
+    if (!winner) throw e; // 理論上到達しないはずだが、万一取得できなければ元の例外を投げる
+    return winner;
+  }
+}
+
+// name/area/address/latitude/longitude/placeIdの更新のみ。activeの変更は既存の
+// updateAccommodationActive()の責務のまま分離する（このAPIでは触らない）。
+function updateAccommodationLocation(id: string, input: AccommodationInput): Accommodation | undefined {
+  const existing = getAccommodationDetail(id);
+  if (!existing) return undefined;
+  db.prepare(
+    `UPDATE accommodations SET name = ?, area = ?, address = ?, latitude = ?, longitude = ?, place_id = ?, location_source = 'MANUAL', location_updated_at = ? WHERE id = ?`
+  ).run(
+    input.name !== undefined ? input.name : existing.name,
+    input.area !== undefined ? input.area : existing.area,
+    input.address !== undefined ? input.address : existing.address,
+    input.latitude !== undefined ? input.latitude : existing.latitude,
+    input.longitude !== undefined ? input.longitude : existing.longitude,
+    input.placeId !== undefined ? input.placeId : existing.placeId,
+    new Date().toISOString(),
+    id
+  );
   return getAccommodationDetail(id);
 }
 // stores側は既存のgetStoreById()がSELECT * を使っておりrowToStore()拡張だけで詳細取得を賄えるため、
@@ -1449,8 +1629,13 @@ function getOrderBySquareOrderId(squareOrderId: string): Order | undefined {
 }
 // Payment Link発行成功時にsquare_order_id/payment_link_idを保存する（Phase A）。
 // payment_statusはここでは変更しない（Payment Link生成 ≠ 決済完了のため）。
-function updateOrderPaymentLink(id: number, squareOrderId: string, paymentLinkId: string) {
-  db.prepare('UPDATE orders SET square_order_id = ?, payment_link_id = ? WHERE id = ?').run(squareOrderId, paymentLinkId, id);
+function updateOrderPaymentLink(id: number, squareOrderId: string, paymentLinkId: string, paymentLinkUrl: string) {
+  db.prepare('UPDATE orders SET square_order_id = ?, payment_link_id = ?, payment_link_url = ? WHERE id = ?').run(
+    squareOrderId,
+    paymentLinkId,
+    paymentLinkUrl,
+    id
+  );
 }
 // Square Webhookのpayment.updatedでPayment.status確定時のみ呼び出す（Phase A）。
 function updateOrderPaymentStatus(id: number, paymentStatus: PaymentStatus) {
@@ -1551,6 +1736,41 @@ app.get('/api/accommodations/:id', requireAuth('ADMIN'), (req: Request, res: Res
   res.json({ ok: true, accommodation });
 });
 
+// 【Phase 1.2基盤】order_availableの手動切り替え（管理用）。active=OFFの施設をONにはできない
+// （updateAccommodationOrderAvailable側でガード、409で拒否）。
+app.patch('/api/accommodations/:id/order-available', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const { orderAvailable } = req.body as { orderAvailable?: unknown };
+  if (typeof orderAvailable !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'orderAvailable は boolean(true/false) で指定してください' });
+  }
+  let accommodation: Accommodation | undefined;
+  try {
+    accommodation = updateAccommodationOrderAvailable(req.params.id, orderAvailable);
+  } catch (e) {
+    if (e instanceof Error && e.message === 'ORDER_AVAILABLE_REQUIRES_ACTIVE') {
+      return res.status(409).json({ ok: false, error: 'active=OFFの施設をorder_available=ONにはできません' });
+    }
+    throw e;
+  }
+  if (!accommodation) return res.status(404).json({ ok: false, error: '指定された宿泊施設が見つかりません' });
+  res.json({ ok: true, accommodation });
+});
+
+// 【Phase 1.2基盤】Place ID存在確認の手動トリガー（管理用）。fields=idのみの無償呼び出しで
+// 現在Googleで解決できるかだけを確認する。施設名・住所の取得・表示は行わない
+// （Google Cloud Support回答待ちの範囲とは完全に分離）。結果がNEEDS_CHECK/UNKNOWNであっても
+// order_availableは変更しない。
+app.post('/api/accommodations/:id/check-place-id', requireAuth('ADMIN'), async (req: Request, res: Response) => {
+  const existing = getAccommodationDetail(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: '指定された宿泊施設が見つかりません' });
+  if (!existing.placeId) {
+    return res.status(400).json({ ok: false, error: 'この宿泊施設にはPlace IDが設定されていません' });
+  }
+  const status = await checkPlaceIdExists(existing.placeId);
+  const accommodation = updateAccommodationPlaceIdStatus(req.params.id, status);
+  res.json({ ok: true, accommodation });
+});
+
 app.patch('/api/accommodations/:id/active', requireAuth('ADMIN'), (req: Request, res: Response) => {
   const { active } = req.body as { active?: unknown };
   if (typeof active !== 'boolean') {
@@ -1558,6 +1778,65 @@ app.patch('/api/accommodations/:id/active', requireAuth('ADMIN'), (req: Request,
   }
   const accommodation = updateAccommodationActive(req.params.id, active);
   if (!accommodation) return res.status(404).json({ ok: false, error: '宿泊施設が見つかりません' });
+  res.json({ ok: true, accommodation });
+});
+
+// 【2026-09-25・社長承認・Phase 1】宿泊施設マスタの新規登録・座標更新。
+// activeはここでは変更しない（既存のPATCH /active の責務のまま）。
+function validateAccommodationInputFields(body: unknown): { ok: true; input: AccommodationInput } | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const input: AccommodationInput = {};
+  if (b.name !== undefined) {
+    if (typeof b.name !== 'string' || !b.name.trim()) return { ok: false, error: 'name は空でない文字列で指定してください' };
+    input.name = b.name;
+  }
+  if (b.area !== undefined) {
+    if (typeof b.area !== 'string' || !b.area.trim()) return { ok: false, error: 'area は空でない文字列で指定してください' };
+    input.area = b.area;
+  }
+  if (b.address !== undefined) {
+    if (b.address !== null && typeof b.address !== 'string') return { ok: false, error: 'address は文字列またはnullで指定してください' };
+    input.address = b.address as string | null;
+  }
+  if (b.latitude !== undefined) {
+    if (b.latitude !== null && typeof b.latitude !== 'number') return { ok: false, error: 'latitude は数値またはnullで指定してください' };
+    input.latitude = b.latitude as number | null;
+  }
+  if (b.longitude !== undefined) {
+    if (b.longitude !== null && typeof b.longitude !== 'number') return { ok: false, error: 'longitude は数値またはnullで指定してください' };
+    input.longitude = b.longitude as number | null;
+  }
+  if (b.placeId !== undefined) {
+    if (b.placeId !== null && typeof b.placeId !== 'string') return { ok: false, error: 'placeId は文字列またはnullで指定してください' };
+    input.placeId = b.placeId as string | null;
+  }
+  return { ok: true, input };
+}
+
+app.post('/api/accommodations', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  const { id } = (req.body ?? {}) as { id?: unknown };
+  if (typeof id !== 'string' || !id.trim()) {
+    return res.status(400).json({ ok: false, error: 'id は必須です' });
+  }
+  if (getAccommodationDetail(id)) {
+    return res.status(409).json({ ok: false, error: 'この id は既に登録されています' });
+  }
+  const validation = validateAccommodationInputFields(req.body);
+  if (!validation.ok) return res.status(400).json({ ok: false, error: validation.error });
+  if (!validation.input.name || !validation.input.area) {
+    return res.status(400).json({ ok: false, error: 'name と area は必須です' });
+  }
+  const accommodation = createAccommodation(id, validation.input);
+  res.json({ ok: true, accommodation });
+});
+
+app.patch('/api/accommodations/:id', requireAuth('ADMIN'), (req: Request, res: Response) => {
+  if (!getAccommodationDetail(req.params.id)) {
+    return res.status(404).json({ ok: false, error: '宿泊施設が見つかりません' });
+  }
+  const validation = validateAccommodationInputFields(req.body);
+  if (!validation.ok) return res.status(400).json({ ok: false, error: validation.error });
+  const accommodation = updateAccommodationLocation(req.params.id, validation.input);
   res.json({ ok: true, accommodation });
 });
 
@@ -2200,6 +2479,42 @@ function checkoutRequestKey(rawOrder: any, recalculatedTotal: number): string {
   });
 }
 
+// 【Phase A・2026-09-25社長承認】checkout冪等性の内容ハッシュ。checkoutRequestKey()とは異なり、
+// Backend再計算後のrecalculatedTotal（Google Routes実測後でないと確定しない）には依存しない、
+// クライアント送信の生の値だけで構成する。これにより、Google Routes呼び出し前の早い段階で
+// 「同一idempotency_keyの注文内容が変わっていないか」を検証できる。
+function buildIdempotencyContentHash(rawOrder: any): string {
+  const normalized = JSON.stringify({
+    storeId: typeof rawOrder.store_id === 'string' ? rawOrder.store_id : null,
+    items: (Array.isArray(rawOrder.line_items) ? rawOrder.line_items : []).map((li: any) => ({
+      productId: li?.product_id ?? null,
+      name: li?.name ?? null,
+      quantity: li?.quantity ?? null,
+    })),
+    accommodationId: typeof rawOrder.accommodation_id === 'string' ? rawOrder.accommodation_id : null,
+    guestName: typeof rawOrder.guest_name === 'string' ? rawOrder.guest_name : null,
+    phoneNumber: typeof rawOrder.phone_number === 'string' ? rawOrder.phone_number : null,
+    deliveryLocation: typeof rawOrder.delivery_location === 'string' ? rawOrder.delivery_location : null,
+    deliveryInstructions: typeof rawOrder.delivery_instructions === 'string' ? rawOrder.delivery_instructions : null,
+    buildingVillaNumber: typeof rawOrder.building_villa_number === 'string' ? rawOrder.building_villa_number : null,
+    note: typeof rawOrder.note === 'string' ? rawOrder.note : null,
+  });
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+// 【Phase A】確定済み注文(Order)から、checkout成功時と同じレスポンス形状を再構築する
+// （idempotency_keyヒット時に、Google Routes再計算やSquare再呼び出しをせずそのまま返すため）。
+function buildCheckoutSuccessResponse(order: Order) {
+  return {
+    ok: true,
+    orderId: order.id,
+    displayNo: order.displayNo,
+    paymentStatus: order.paymentStatus,
+    totalMoney: order.totalMoney,
+    paymentLinkUrl: order.paymentLinkUrl,
+  };
+}
+
 // ============================================================
 // Square Payment Link生成（Phase A）
 // 【重要】client.checkoutApi.createPaymentLink() を使用する（client.paymentLinksApiは
@@ -2219,18 +2534,32 @@ interface CreateOrderPaymentLinkResult {
   error?: string;
 }
 
+// 【Square Payment Link再試行・社長承認】itemsの型を、この関数が実際に必要とする最小限の
+// 構造型（name/quantity/unitPrice）に緩和する。既存呼び出し元（validation.items!、
+// ValidatedLineItem[]）はこの3フィールドをすべて持つため無変更のまま渡せる。これにより、
+// 再試行時にorder_line_itemsから復元した明細（OrderLineItem[]）も、新しい変換関数を
+// 作らずこの同じ関数へそのまま渡せるようにする。
+interface SquarePaymentLinkLineItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+}
 async function createSquarePaymentLinkForOrder(
   orderId: number,
   paymentAttemptNo: number,
-  items: ValidatedLineItem[],
-  deliveryFee: number
+  items: SquarePaymentLinkLineItem[],
+  deliveryFee: number,
+  // 【Phase A】クライアントがcheckout冪等性キーを送信していれば、Square側の
+  // idempotencyKeyにも同じ値を使う（ORDとSquare双方の冪等性を連動させる、社長指示）。
+  // 未指定時（クライアントが冪等性キーを送らない場合）は既存通りorderId-attemptNoを使用する。
+  clientIdempotencyKey?: string | null
 ): Promise<CreateOrderPaymentLinkResult> {
   const configCheck = validateSquareConfigForPayments();
   if (!configCheck.ok || !squareClient) {
     return { ok: false, error: `Square決済設定が不足しています: ${configCheck.errors.join(', ')}` };
   }
 
-  const idempotencyKey = `${orderId}-${paymentAttemptNo}`;
+  const idempotencyKey = clientIdempotencyKey || `${orderId}-${paymentAttemptNo}`;
 
   try {
     // 【STEP C-2 Stage 4・2026-09-22社長承認】配送料を独立したline itemとしてSquareの
@@ -2472,10 +2801,267 @@ app.get('/api/public/accommodations', (_req: Request, res: Response) => {
   res.json({ ok: true, accommodations: getPublicAccommodations() });
 });
 
+// ============================================================
+// 【Phase B・2026-09-25社長承認】顧客向けGoogle施設検索フロー。
+// Google由来の施設名・住所・候補一覧はいずれもDB・ログへ保存しない（その場限りの表示専用）。
+// 3つのAPI（search-external → preview → confirm）は、顧客の1回の検索操作の中でこの順に
+// 呼ばれることを想定する。confirmを経るまでORD施設マスターへの新規登録は一切発生しない。
+// ============================================================
+
+app.post('/api/public/accommodations/search-external', async (req: Request, res: Response) => {
+  const input = typeof req.body?.input === 'string' ? req.body.input.trim() : '';
+  const sessionToken = typeof req.body?.sessionToken === 'string' ? req.body.sessionToken.trim() : '';
+  if (!input) return res.status(400).json({ ok: false, error: 'input は必須です' });
+  if (!sessionToken) return res.status(400).json({ ok: false, error: 'sessionToken は必須です' });
+
+  const result = await searchAutocomplete(input, sessionToken);
+  if (result.status === 'NOT_ATTEMPTED') {
+    return res.status(503).json({ ok: false, error: '現在この機能をご利用いただけません' });
+  }
+  if (result.status === 'API_ERROR') {
+    return res.status(503).json({ ok: false, error: '現在検索できません。しばらくしてから再度お試しください。' });
+  }
+  // Google由来の候補（placeId/text）はレスポンスとして返すのみ。DBには一切保存しない。
+  res.json({ ok: true, suggestions: result.suggestions, attributionRequired: true });
+});
+
+app.post('/api/public/accommodations/preview', async (req: Request, res: Response) => {
+  const placeId = typeof req.body?.placeId === 'string' ? req.body.placeId.trim() : '';
+  const sessionToken = typeof req.body?.sessionToken === 'string' ? req.body.sessionToken.trim() : '';
+  if (!placeId) return res.status(400).json({ ok: false, error: 'placeId は必須です' });
+  if (!sessionToken) return res.status(400).json({ ok: false, error: 'sessionToken は必須です' });
+
+  const result = await fetchPlaceDetailsForPreview(placeId, sessionToken);
+  if (result.status === 'NOT_ATTEMPTED') {
+    return res.status(503).json({ ok: false, error: '現在この機能をご利用いただけません' });
+  }
+  if (result.status === 'NOT_FOUND') {
+    return res.status(404).json({ ok: false, error: '指定された施設が見つかりません' });
+  }
+  if (result.status === 'INVALID_REQUEST') {
+    return res.status(400).json({ ok: false, error: '不正なplaceIdです' });
+  }
+  if (result.status !== 'SUCCESS' || !result.result) {
+    return res.status(503).json({ ok: false, error: '現在施設情報を取得できません。しばらくしてから再度お試しください。' });
+  }
+
+  // previewToken発行：この施設名・住所・placeIdをDBへ一切保存せず、署名付きトークンとして
+  // 顧客側に一時保持させる（confirmでの結びつけ確認用）。
+  const previewToken = issuePreviewToken(placeId, sessionToken);
+  res.json({
+    ok: true,
+    placeId: result.result.placeId,
+    name: result.result.name,
+    address: result.result.address,
+    previewToken,
+    attributionRequired: true,
+  });
+});
+
+app.post('/api/public/accommodations/confirm', async (req: Request, res: Response) => {
+  const placeId = typeof req.body?.placeId === 'string' ? req.body.placeId.trim() : '';
+  const previewTokenRaw = typeof req.body?.previewToken === 'string' ? req.body.previewToken : '';
+  const sessionToken = typeof req.body?.sessionToken === 'string' ? req.body.sessionToken.trim() : '';
+  if (!placeId) return res.status(400).json({ ok: false, error: 'placeId は必須です' });
+  if (!previewTokenRaw) return res.status(400).json({ ok: false, error: 'previewToken は必須です' });
+  if (!sessionToken) return res.status(400).json({ ok: false, error: 'sessionToken は必須です' });
+
+  // 1〜4：HMAC署名確認・token期限確認・placeId一致確認・sessionとの関連性確認。
+  // previewを経由していないconfirm（このトークン検証を通過できないconfirm）は必ずここで拒否される。
+  const verified = verifyPreviewToken(previewTokenRaw);
+  if (!verified.ok) {
+    if (verified.reason === 'EXPIRED') {
+      return res.status(410).json({ ok: false, error: '確認の有効期限が切れています。もう一度宿泊先を検索してください。' });
+    }
+    return res.status(400).json({ ok: false, error: '不正なpreviewTokenです' });
+  }
+  if (verified.payload.placeId !== placeId) {
+    return res.status(400).json({ ok: false, error: 'placeIdがpreview時と一致しません' });
+  }
+  if (!matchesSessionToken(verified.payload, sessionToken)) {
+    return res.status(400).json({ ok: false, error: 'sessionTokenがpreview時と一致しません' });
+  }
+
+  // 5：Googleへfields=idで再検証（第二の防御層。previewTokenの真正性だけでPlace IDの
+  // 実在性を保証したことにはしない、社長指示）。
+  const placeIdStatus = await checkPlaceIdExists(placeId);
+  if (placeIdStatus !== 'VALID') {
+    return res.status(422).json({ ok: false, error: '指定された宿泊先を確認できませんでした。もう一度検索してください。' });
+  }
+
+  // 6〜9：既存Place ID検索→既存流用 or 新規作成（race condition対策込み）→accommodationId返却。
+  const accommodation = findOrCreateAccommodationByPlaceId(placeId);
+  res.json({ ok: true, accommodationId: accommodation.id });
+});
+
+// 【2026-09-25・社長承認・Phase 1】カート内コンシェルジュ表示のための事前見積もりAPI。
+// 注文を確定せずに、配送先(accommodationId)への配送料・最低注文額を取得できる。
+// 【重要】経路は必ず一本：accommodationId→accommodationsの緯度経度→storesの緯度経度
+// →既存Google Routes実装(resolveRestaurantToCustomerPricing)→pricing_rules、という
+// checkout(2600行目付近)と全く同じ経路・同じ関数をそのまま再利用する。この関数の中で
+// calculateDeliveryFee/calculateMinimumOrderが同一のGoogle Routes結果(1回のroute呼び出し)
+// から算出されるため、新API側で別々の固定値を組み立てることは構造的にできない。
+// 60分超(isConsultation)の場合はdeliveryFee/minimumOrderAmountをnullで返す
+// （固定の¥5,000・¥15,000等を勝手に補完しない）。Google Routes自体が失敗した場合は
+// 「60分超」と区別し、503エラーとして返す（推測値を返さない）。
+app.post('/api/public/delivery-estimate', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { catalogStoreId?: unknown; accommodationId?: unknown };
+  const catalogStoreId = typeof body.catalogStoreId === 'string' ? body.catalogStoreId.trim() : '';
+  const accommodationId = typeof body.accommodationId === 'string' ? body.accommodationId.trim() : '';
+  if (!catalogStoreId) {
+    return res.status(400).json({ ok: false, error: 'catalogStoreId は必須です' });
+  }
+  if (!accommodationId) {
+    return res.status(400).json({ ok: false, error: 'accommodationId は必須です' });
+  }
+
+  const store = getStoreByCatalogId(catalogStoreId);
+  if (!store || !store.active) {
+    return res.status(404).json({ ok: false, error: '店舗が見つからないか、現在ご注文いただけません' });
+  }
+  const accommodation = getAccommodationById(accommodationId);
+  // 【Phase 1.2・vFinal確定事項】判定はactive（顧客候補として表示するか）ではなく
+  // order_available（今回の注文に使えるか）で行う。active=OFFの施設は必ずorder_availableも
+  // 0に連動しているため、この変更によりactive=OFFの施設が誤って利用可能になることはない。
+  if (!accommodation || !accommodation.order_available) {
+    return res.status(404).json({ ok: false, error: '宿泊先が見つからないか、現在ご利用いただけません' });
+  }
+
+  const restaurantLocation: LatLng | null =
+    store.latitude !== null && store.longitude !== null ? { latitude: store.latitude, longitude: store.longitude } : null;
+  const customerLocation: LatLng | null =
+    accommodation.latitude !== null && accommodation.longitude !== null
+      ? { latitude: accommodation.latitude, longitude: accommodation.longitude }
+      : null;
+
+  // 【2026-09-25・staticDuration切替】第4引数は既存関数シグネチャ互換のために残しているが、
+  // googleMapsClient.ts側でGoogleへは送信されない（staticDurationはdepartureTimeに依存しないため）。
+  // 【Place ID→Routes接続・社長承認】accommodation.place_idを末尾引数として渡す。座標が
+  // NULLでもPlace IDがあればRoutes計算できる（googleMapsClient.ts側の検証で吸収される）。
+  const result = await resolveRestaurantToCustomerPricing(
+    db,
+    restaurantLocation,
+    customerLocation,
+    new Date(),
+    undefined,
+    accommodation.place_id
+  );
+
+  if (result.mapsStatus !== 'SUCCESS' || result.restaurantToCustomerDurationMinutes === null) {
+    // 座標未確定・Google Routes失敗はいずれも「見積もり不能」。推測値は返さない。
+    return res.status(503).json({
+      ok: false,
+      error: '現在この配送先への配送料金を見積もれません。しばらくしてから再度お試しください。',
+      mapsStatus: result.mapsStatus,
+    });
+  }
+
+  const isConsultation = result.deliveryFee.isConsultation || result.minimumOrder.isConsultation;
+  res.json({
+    ok: true,
+    deliveryTimeMinutes: result.restaurantToCustomerDurationMinutes,
+    deliveryFee: isConsultation ? null : result.deliveryFee.amount,
+    minimumOrderAmount: isConsultation ? null : result.minimumOrder.amount,
+    isConsultation,
+  });
+});
+
+// ============================================================
+// 【設計メモ・未実装】将来のaddress-confirm（vFinal 6-B：住所のみ入力経路）に向けた設計原則。
+// Google Cloud Support回答待ちのため、Address Validation API連携・地図ピンUI・address-confirm
+// エンドポイント自体は今回実装しない。実装時は以下を必ず守ること：
+//
+// 1. クライアントが送信するlatitude/longitude/place_idは「これから検証する候補」として
+//    扱い、そのままpricing_rulesの計算（Google Routes呼び出し）へ渡してはならない。
+// 2. 上記のdelivery-estimate/checkoutと同様、配送料・最低注文額は必ずサーバー側で
+//    Google Routes実測結果から算出する（クライアントの自己申告値を信用しない）。
+// 3. place_idが取得できた場合のみaccommodationsマスターへの恒久登録を許可する。
+//    place_idが取得できない住所ベースの座標は、その注文の処理にのみ一時利用し、
+//    DB・恒久ログ・analyticsのいずれにも保存しない（vFinal確定事項）。
+// ============================================================
+
 app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   const rawOrder = req.body;
   if (!rawOrder || typeof rawOrder !== 'object' || Array.isArray(rawOrder)) {
     return res.status(400).json({ ok: false, error: '不正なリクエストボディです' });
+  }
+
+  // ============================================================
+  // 【Phase A・2026-09-25社長承認】checkout冪等性キーの早期チェック。
+  // 【重要】既存の5秒間インメモリ簡易チェック(recentCheckoutRequests)はそのまま維持し、
+  // 別機能へ変更・置き換えしない。idempotency_keyは任意項目（クライアント未送信時は
+  // 従来通りこのブロックを素通りし、以降は既存の5秒間簡易チェックのみで動作する＝後方互換）。
+  // Google Routes呼び出し・金額再計算より前に行うことで、既存注文がヒットした場合に
+  // 無駄なRoutes再計算を発生させない（Square再試行については後述の分岐を参照）。
+  // ============================================================
+  const idempotencyKey = typeof rawOrder.idempotency_key === 'string' && rawOrder.idempotency_key.trim() ? rawOrder.idempotency_key.trim() : null;
+  if (idempotencyKey) {
+    const existingByKey = getOrderByIdempotencyKey(idempotencyKey);
+    if (existingByKey) {
+      const freshContentHash = buildIdempotencyContentHash(rawOrder);
+      if (existingByKey.idempotencyContentHash !== freshContentHash) {
+        return res.status(409).json({
+          ok: false,
+          error: 'この確認番号(idempotency_key)は既に別の内容の注文で使用されています',
+        });
+      }
+      // 内容が一致する再送：新規注文は作らず、Google Routes再計算も行わない。
+      // 【社長承認・Square Payment Link再試行】ただしpayment_link_urlがまだnullの場合
+      // （初回のSquare呼び出しが失敗した注文）に限り、同じ注文内容・同じidempotency_keyで
+      // Squareへの再試行だけを行う（注文の新規作成・Google Routes再計算は行わない）。
+      if (existingByKey.paymentLinkUrl) {
+        return res.status(201).json(buildCheckoutSuccessResponse(existingByKey));
+      }
+
+      const storedLineItems = getOrderLineItemsByOrderId(existingByKey.id);
+      const allPricesResolved = storedLineItems.length > 0 && storedLineItems.every(li => li.ordPriceUnit !== null);
+      if (!allPricesResolved || existingByKey.deliveryFee === null) {
+        // 保存済み明細から安全に再構成できない場合は、既存のSquare失敗時と同じエラー処理にする
+        // （推測の金額でSquareへ送らない）。
+        return res.status(502).json({
+          ok: false,
+          orderId: existingByKey.id,
+          error: '注文は登録されていますが、決済リンクの再生成に必要な情報が不足しています。ORD運営までお問い合わせください。',
+        });
+      }
+      const squareLineItems: SquarePaymentLinkLineItem[] = storedLineItems.map(li => ({
+        name: li.productName,
+        quantity: li.quantity,
+        unitPrice: li.ordPriceUnit as number,
+      }));
+
+      const doCreatePaymentLinkForRetry =
+        (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.createSquarePaymentLinkForOrder) ||
+        createSquarePaymentLinkForOrder;
+      const retryResult = await doCreatePaymentLinkForRetry(
+        existingByKey.id,
+        existingByKey.paymentAttemptNo,
+        squareLineItems,
+        existingByKey.deliveryFee,
+        idempotencyKey // 元のORD idempotency_keyをそのままSquare側のidempotencyKeyとして再利用する
+      );
+      if (!retryResult.ok) {
+        console.error(`[注文受付API] 注文#${existingByKey.id}のPayment Link再試行に失敗しました: ${retryResult.error}`);
+        return res.status(502).json({
+          ok: false,
+          orderId: existingByKey.id,
+          error: `注文は登録されましたが、決済リンクの生成に失敗しました: ${retryResult.error}`,
+        });
+      }
+
+      const doUpdateOrderPaymentLinkForRetry =
+        (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.updateOrderPaymentLink) || updateOrderPaymentLink;
+      doUpdateOrderPaymentLinkForRetry(
+        existingByKey.id,
+        retryResult.squareOrderId!,
+        retryResult.paymentLinkId!,
+        retryResult.paymentLinkUrl!
+      );
+
+      return res.status(201).json(
+        buildCheckoutSuccessResponse({ ...existingByKey, paymentLinkUrl: retryResult.paymentLinkUrl! })
+      );
+    }
   }
 
   // 金額・商品・数量・店舗整合性の検証と再計算（STEP2-C-5で作成済みのロジックをそのまま再利用。
@@ -2539,16 +3125,24 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
   if (!accommodation) {
     return res.status(400).json({ ok: false, error: `指定された宿泊施設(accommodation_id: ${rawAccommodationId})が見つかりません` });
   }
-  if (!accommodation.active) {
+  // 【Phase 1.2・vFinal確定事項】判定はactiveではなくorder_availableで行う（delivery-estimateと同じ理由）。
+  if (!accommodation.order_available) {
     return res.status(400).json({ ok: false, error: '指定された宿泊施設は現在選択できません' });
   }
-  if (!isValidCoordinate(accommodation.latitude, accommodation.longitude)) {
-    console.error(`[注文受付API] accommodation_id="${accommodation.id}"の座標が未登録または不正です`);
+  // 【Place ID→Routes接続・社長承認】座標が未確定でも、有効なPlace IDがあれば拒否しない
+  // （Place ID方式でGoogle Routes計算を行うため）。座標・Place IDのいずれも無い場合のみ、
+  // 従来どおり503で拒否する（推測しない）。
+  const hasValidAccommodationCoordinate = isValidCoordinate(accommodation.latitude, accommodation.longitude);
+  const hasValidAccommodationPlaceId = typeof accommodation.place_id === 'string' && accommodation.place_id.trim().length > 0;
+  if (!hasValidAccommodationCoordinate && !hasValidAccommodationPlaceId) {
+    console.error(`[注文受付API] accommodation_id="${accommodation.id}"の座標・Place IDのいずれも未登録または不正です`);
     return res.status(503).json({ ok: false, error: '現在この宿泊施設への配送は一時的にご利用いただけません' });
   }
   const accommodationId = accommodation.id;
-  const accommodationLatitude = accommodation.latitude as number;
-  const accommodationLongitude = accommodation.longitude as number;
+  // 座標が無い（Place IDのみの）施設ではnullのまま扱う。orders.accommodation_latitude/longitude
+  // は元々nullを許容する設計（Phase B以前からの既存スキーマ）のため、DB変更は不要。
+  const accommodationLatitude = hasValidAccommodationCoordinate ? (accommodation.latitude as number) : null;
+  const accommodationLongitude = hasValidAccommodationCoordinate ? (accommodation.longitude as number) : null;
   const buildingVillaNumber = typeof rawOrder.building_villa_number === 'string' ? rawOrder.building_villa_number : null;
 
   // ============================================================
@@ -2596,8 +3190,21 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
     storeResolution.latitude !== null && storeResolution.longitude !== null
       ? { latitude: storeResolution.latitude, longitude: storeResolution.longitude }
       : null;
-  const customerLocation: LatLng = { latitude: accommodationLatitude, longitude: accommodationLongitude };
-  const routePricing = await resolveRestaurantToCustomerPricing(db, restaurantLocation, customerLocation, new Date());
+  // 【Place ID→Routes接続・社長承認】座標がnull（Place IDのみの施設）の場合はcustomerLocationも
+  // nullにする。resolveRestaurantToCustomerPricing側がplace_idを優先して使用する。
+  const customerLocation: LatLng | null =
+    accommodationLatitude !== null && accommodationLongitude !== null
+      ? { latitude: accommodationLatitude, longitude: accommodationLongitude }
+      : null;
+  // 【2026-09-25・staticDuration切替】delivery-estimateと同様、第4引数はGoogleへ送信されない。
+  const routePricing = await resolveRestaurantToCustomerPricing(
+    db,
+    restaurantLocation,
+    customerLocation,
+    new Date(),
+    undefined,
+    accommodation.place_id
+  );
   if (routePricing.mapsStatus !== 'SUCCESS' || routePricing.restaurantToCustomerDurationMinutes === null) {
     console.error(
       `[注文受付API] Google Routes実測に失敗したため注文を作成しません（status: ${routePricing.mapsStatus}）。推測値は使用しません。`
@@ -2689,7 +3296,13 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
         )
       : null;
 
-    const order = runInTransaction(() => {
+    // 【Phase A】race condition対策：ほぼ同時に同じidempotency_keyで2件のリクエストが
+    // 「既存なし」判定を通過した場合でも、DB側のUNIQUE制約（idx_orders_idempotency_key_unique）が
+    // 後勝ちのINSERTを拒否する。ここではその拒否を捕捉し、先に成功した側の注文を再取得して返す
+    // （2件目のリクエストを単純にエラーとして失敗させない）。
+    let order: Order;
+    try {
+      order = runInTransaction(() => {
       const created = insertOrder({
         squareOrderId: '', // このSTEPではSquare未使用のため常に空文字
         items: validation.items!.map(i => ({ name: i.name, quantity: String(i.quantity) })),
@@ -2707,6 +3320,9 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
         paymentStatus: 'PENDING',
         paymentAttemptNo: 1,
         paymentLinkId: '',
+        paymentLinkUrl: null,
+        idempotencyKey,
+        idempotencyContentHash: idempotencyKey ? buildIdempotencyContentHash(rawOrder) : null,
         deliveryTimeMinutes,
         driverReward,
         deliveryFee,
@@ -2740,7 +3356,28 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
       });
 
       return created;
-    });
+      });
+    } catch (e) {
+      const isIdempotencyKeyConflict =
+        idempotencyKey !== null && e instanceof Error && e.message.includes('idempotency_key');
+      if (!isIdempotencyKeyConflict) throw e; // 通常のDBエラー等はそのまま外側のcatchへ
+      const winner = getOrderByIdempotencyKey(idempotencyKey!);
+      if (!winner) throw e; // 理論上到達しないはずだが、万一取得できなければ元の例外を投げる
+      // 【2026-09-25・社長承認・READ-ONLY監査で発見した不整合の修正】
+      // race conditionでUNIQUE制約違反を捕捉した場合も、早期重複チェック側（このファイル冒頭の
+      // idempotency_key早期チェック）と同じ「同じkey＋異なる内容→409、既存注文の内容は返さない」
+      // という仕様に統一する。修正前は内容の一致確認をせず無条件に既存注文を返しており、
+      // 自分が送信した内容と異なる注文結果を後着リクエストが受け取ってしまう不整合があった。
+      const raceContentHash = buildIdempotencyContentHash(rawOrder);
+      if (winner.idempotencyContentHash !== raceContentHash) {
+        return res.status(409).json({
+          ok: false,
+          error: 'この確認番号(idempotency_key)は既に別の内容の注文で使用されています',
+        });
+      }
+      // 内容が一致する場合のみ、先に成功した側の注文をそのまま返す（このリクエスト側では新規注文を作らない）。
+      return res.status(201).json(buildCheckoutSuccessResponse(winner));
+    }
     createdOrderId = order.id; // 【2026-09-21】ここ以降の例外は「登録済み注文」に対するものと区別する
 
     if (validation.amountMismatch) {
@@ -2757,7 +3394,15 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
     const doCreatePaymentLink =
       (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.createSquarePaymentLinkForOrder) ||
       createSquarePaymentLinkForOrder;
-    const paymentLinkResult = await doCreatePaymentLink(order.id, order.paymentAttemptNo, validation.items!, deliveryFee);
+    // 【Phase A】クライアントがidempotency_keyを送信していれば、Square側のidempotencyKeyにも
+    // 同じ値を渡す（ORDとSquare双方の冪等性を連動させる、社長指示）。
+    const paymentLinkResult = await doCreatePaymentLink(
+      order.id,
+      order.paymentAttemptNo,
+      validation.items!,
+      deliveryFee,
+      idempotencyKey
+    );
     if (!paymentLinkResult.ok) {
       console.error(`[注文受付API] 注文#${order.id}のPayment Link生成に失敗しました: ${paymentLinkResult.error}`);
       return res.status(502).json({
@@ -2769,7 +3414,12 @@ app.post('/api/orders/checkout', async (req: Request, res: Response) => {
 
     const doUpdateOrderPaymentLink =
       (process.env.ORD_TEST_HOOKS === 'true' && __checkoutTestHooks.updateOrderPaymentLink) || updateOrderPaymentLink;
-    doUpdateOrderPaymentLink(order.id, paymentLinkResult.squareOrderId!, paymentLinkResult.paymentLinkId!);
+    doUpdateOrderPaymentLink(
+      order.id,
+      paymentLinkResult.squareOrderId!,
+      paymentLinkResult.paymentLinkId!,
+      paymentLinkResult.paymentLinkUrl!
+    );
 
     res.status(201).json({
       ok: true,
